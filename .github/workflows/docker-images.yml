@@ -4,6 +4,8 @@ on:
   push:
     tags:
       - "v*"
+      # The downstream lane publishes a native agent binary, not mutable images.
+      - "!v*-cs.*"
 
 jobs:
   build:

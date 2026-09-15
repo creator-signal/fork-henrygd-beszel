@@ -1,0 +1,28 @@
+name: Beszel Agent Linux amd64 qualification
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_revision:
+        required: true
+        default: 6e3fd90834309213aca32f2ff5fb0b027661c39a
+
+jobs:
+  qualify:
+    runs-on: native-linux-amd64
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with: { ref: ${{ inputs.source_revision }}, fetch-depth: 0 }
+      - name: Require governed source identity
+        run: test "$(git rev-parse HEAD)" = 6e3fd90834309213aca32f2ff5fb0b027661c39a
+      - name: Test and build agent
+        run: |
+          go test ./agent ./agent/health ./internal/cmd/agent
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=true -o out/beszel-agent ./internal/cmd/agent
+          ./out/beszel-agent --version
+          tar -C out -czf out/beszel-agent_linux_amd64.tar.gz beszel-agent
+          sha256sum out/beszel-agent out/beszel-agent_linux_amd64.tar.gz > out/SHA256SUMS
+      - name: Produce SPDX SBOM
+        run: syft packages dir:. -o spdx-json=out/beszel-agent_linux_amd64.spdx.json
+      - uses: actions/upload-artifact@0b7f8abb1508181956e8e162db84b466c27e18ce # v4
+        with: { name: beszel-agent-linux-amd64-${{ inputs.source_revision }}, path: out, if-no-files-found: error }

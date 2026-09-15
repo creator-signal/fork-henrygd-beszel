@@ -1,0 +1,55 @@
+name: Publish governed Beszel Agent release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag: { required: true, type: string }
+      forgejo_run_url: { required: true, type: string }
+      forgejo_artifact_url: { required: true, type: string }
+      forgejo_artifact_sha256: { required: true, type: string }
+
+permissions: { contents: read }
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    permissions: { contents: write, id-token: write, attestations: write }
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with: { ref: creator-signal/main, fetch-depth: 0 }
+      - name: Verify source and release request
+        run: |
+          test "$(git rev-parse HEAD)" = 6e3fd90834309213aca32f2ff5fb0b027661c39a
+          python3 scripts/creator-signal/beszel_release_control.py --policy creator-signal/beszel-agent-release-policy.json
+          [[ '${{ inputs.release_tag }}' =~ ^v0\.18\.7-cs\.[1-9][0-9]*$ ]]
+      - name: Download exact Forgejo-qualified artifact
+        env: { URL: ${{ inputs.forgejo_artifact_url }}, EXPECTED: ${{ inputs.forgejo_artifact_sha256 }}, FORGEJO_RELEASE_TOKEN: ${{ secrets.FORGEJO_RELEASE_TOKEN }} }
+        run: |
+          test -n "$FORGEJO_RELEASE_TOKEN"
+          mkdir release && curl --fail --location --retry 3 --header "Authorization: token $FORGEJO_RELEASE_TOKEN" "$URL" --output release/beszel-agent_linux_amd64.tar.gz
+          echo "$EXPECTED  release/beszel-agent_linux_amd64.tar.gz" | sha256sum --check --status
+      - name: Require Forgejo qualification evidence
+        run: test -n '${{ inputs.forgejo_run_url }}'
+      - name: Create immutable manifest and SBOM
+        run: |
+          tar -xzf release/beszel-agent_linux_amd64.tar.gz -C release
+          sha256sum release/beszel-agent > release/beszel-agent.binary.sha256
+          syft packages file:release/beszel-agent -o spdx-json=release/beszel-agent_linux_amd64.spdx.json
+          python3 - <<'PY' > release/creator-signal-beszel-agent-release.json
+          import json, pathlib, hashlib, os
+          asset=pathlib.Path('release/beszel-agent_linux_amd64.tar.gz'); binary=pathlib.Path('release/beszel-agent')
+          digest=lambda p: hashlib.sha256(p.read_bytes()).hexdigest()
+          print(json.dumps({'schema':'creator-signal.beszel-agent-release/v1','releaseTag':'${{ inputs.release_tag }}','sourceRevision':'6e3fd90834309213aca32f2ff5fb0b027661c39a','upstream':{'repository':'https://github.com/henrygd/beszel.git','tag':'v0.18.7','revision':'6e3fd90834309213aca32f2ff5fb0b027661c39a'},'artifacts':{'linux-amd64':{'name':asset.name,'sha256':digest(asset),'size':asset.stat().st_size,'binarySha256':digest(binary)}},'provenance':{'type':'github-artifact-attestation'},'sbom':{'format':'spdx-json','name':'beszel-agent_linux_amd64.spdx.json'},'qualification':{'forgejoRunUrl':'${{ inputs.forgejo_run_url }}','hubTag':'v0.18.7','hubRevision':'6e3fd90834309213aca32f2ff5fb0b027661c39a'}}, sort_keys=True))
+          PY
+          python3 scripts/creator-signal/beszel_release_control.py --manifest release/creator-signal-beszel-agent-release.json --directory release
+      - uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a
+        with: { subject-path: release/beszel-agent_linux_amd64.tar.gz }
+      - uses: actions/attest-sbom@4651f806c01d8637787e274ac3bdf724ef169f34
+        with: { subject-path: release/beszel-agent_linux_amd64.tar.gz, sbom-path: release/beszel-agent_linux_amd64.spdx.json }
+      - name: Publish release and independently pull back bytes
+        env: { GH_TOKEN: ${{ github.token }}, TAG: ${{ inputs.release_tag }} }
+        run: |
+          gh release create "$TAG" release/* --verify-tag --title "Beszel Agent $TAG (Creator Signal)"
+          mkdir published && gh release download "$TAG" --dir published
+          cmp release/beszel-agent_linux_amd64.tar.gz published/beszel-agent_linux_amd64.tar.gz
+          gh attestation verify published/beszel-agent_linux_amd64.tar.gz --repo "$GITHUB_REPOSITORY" --predicate-type https://slsa.dev/provenance/v1

@@ -4,6 +4,9 @@ on:
   push:
     tags:
       - "v*"
+      # Creator Signal release identities are published only by the governed
+      # workflow, never by this inherited upstream workflow.
+      - "!v*-cs.*"
 
 permissions:
   contents: write

@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "manifestSchema": "creator-signal.beszel-agent-release/v1",
+  "upstream": {
+    "repository": "https://github.com/henrygd/beszel.git",
+    "tag": "v0.18.7",
+    "revision": "6e3fd90834309213aca32f2ff5fb0b027661c39a"
+  },
+  "integrationBranch": "creator-signal/develop",
+  "releaseBranch": "creator-signal/main",
+  "downstreamTagPattern": "^v0\\.18\\.7-cs\\.[1-9][0-9]*$",
+  "artifact": {
+    "os": "linux",
+    "arch": "amd64",
+    "name": "beszel-agent_linux_amd64.tar.gz",
+    "binaryPath": "beszel-agent"
+  },
+  "qualification": {
+    "hubTag": "v0.18.7",
+    "hubRevision": "6e3fd90834309213aca32f2ff5fb0b027661c39a",
+    "required": ["native-linux-amd64", "hub-agent-handshake", "artifact-sha256", "binary-sha256"]
+  },
+  "supplyChain": {
+    "sbomFormat": "spdx-json",
+    "provenance": "github-artifact-attestation",
+    "publication": "github-release-after-forgejo-qualification"
+  }
+}

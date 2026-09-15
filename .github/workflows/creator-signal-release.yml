@@ -11,7 +11,8 @@ permissions: { contents: read }
 
 jobs:
   publish:
-    runs-on: ubuntu-24.04
+    # The published release is admitted only from a runner with private Forgejo connectivity.
+    runs-on: [self-hosted, Linux, X64, beszel-release-control]
     permissions: { contents: write, id-token: write, attestations: write }
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
@@ -22,7 +23,8 @@ jobs:
         run: |
           test "$GITHUB_REF" = refs/heads/creator-signal/main
           test "$WORKFLOW_REF" = "$GITHUB_REPOSITORY/.github/workflows/creator-signal-release.yml@refs/heads/creator-signal/main"
-          test "$(gh api "repos/$GITHUB_REPOSITORY/branches/creator-signal/main" --jq .protected)" = true
+          test "$(gh api "repos/$GITHUB_REPOSITORY/branches/creator-signal%2Fmain" --jq .protected)" = true
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           git merge-base --is-ancestor 6e3fd90834309213aca32f2ff5fb0b027661c39a HEAD
           echo "revision=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           python3 scripts/creator-signal/beszel_release_control.py --policy creator-signal/beszel-agent-release-policy.json
@@ -34,7 +36,7 @@ jobs:
           [[ "$RUN_ID" =~ ^[1-9][0-9]*$ ]] && [[ "$EXPECTED" =~ ^[0-9a-f]{64}$ ]]
           base=https://forge.creatorsignal.me:14110/api/v1/repos/creator-signal/fork-henrygd-beszel
           curl --fail --proto '=https' --proto-redir '=https' --max-redirs 0 --header "Authorization: token $FORGEJO_RELEASE_TOKEN" "$base/actions/runs/$RUN_ID" -o run.json
-          jq -e --arg source "$SOURCE_REVISION" 'type == "object" and (.status | type == "string") and (.commit_sha | type == "string") and .status == "success" and .commit_sha == $source' run.json >/dev/null
+          jq -e --arg source "$SOURCE_REVISION" 'type == "object" and (.status | type == "string") and (.commit_sha | type == "string") and (.workflow_id | type == "string") and .status == "success" and .commit_sha == $source and .workflow_id == "beszel-agent-qualification.yml"' run.json >/dev/null
           curl --fail --proto '=https' --proto-redir '=https' --max-redirs 0 --header "Authorization: token $FORGEJO_RELEASE_TOKEN" "$base/actions/runs/$RUN_ID/artifacts" -o artifacts.json
           jq -e --arg source "$SOURCE_REVISION" 'type == "object" and (.artifacts | type == "array") and ([.artifacts[] | select((.name | type == "string") and .name == "beszel-agent-linux-amd64-" + $source and .expired != true and (.id | type == "number"))] | length == 1)' artifacts.json >/dev/null
           artifact_id=$(jq -r --arg source "$SOURCE_REVISION" '.artifacts[] | select(.name == "beszel-agent-linux-amd64-" + $source and .expired != true) | .id' artifacts.json)
@@ -90,7 +92,7 @@ jobs:
           print(json.dumps({'algorithm':'Ed25519','signature':'$signature','manifestSha256':'$manifest_sha256','sourceRevision':os.environ['SOURCE_REVISION'],'publicKeySha256':'$public_key_sha256'}, sort_keys=True))
           PY
           openssl pkeyutl -verify -pubin -inkey "$public_key" -rawin -in release/creator-signal-beszel-agent-release.json -sigfile "$signature_file"
-          sha256sum release/* > release/SHA256SUMS
+          sha256sum release/beszel-agent_linux_amd64.tar.gz release/beszel-agent_linux_amd64.spdx.json release/beszel-agent.binary.sha256 release/creator-signal-beszel-agent-release.json release/creator-signal-beszel-agent-release.signature.json > release/SHA256SUMS
       - uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a
         with: { subject-path: release/beszel-agent_linux_amd64.tar.gz }
       - uses: actions/attest-sbom@4651f806c01d8637787e274ac3bdf724ef169f34
@@ -99,6 +101,8 @@ jobs:
         env: { TAG: "${{ inputs.release_tag }}", SOURCE_REVISION: "${{ steps.source.outputs.revision }}" }
         run: |
           test -z "$(git ls-remote --tags origin "refs/tags/$TAG")"
+          git config user.name "creator-signal-release[bot]"
+          git config user.email "creator-signal-release[bot]@users.noreply.github.com"
           git tag -a "$TAG" "$SOURCE_REVISION" -m "Creator Signal Beszel Agent $TAG"
           git push origin "refs/tags/$TAG"
       - name: Publish release and independently pull back bytes

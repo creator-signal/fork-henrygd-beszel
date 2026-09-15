@@ -5,24 +5,48 @@ on:
     inputs:
       source_revision:
         required: true
-        default: 6e3fd90834309213aca32f2ff5fb0b027661c39a
 
 jobs:
   qualify:
+    # Requires a separately registered protected Forgejo native Linux amd64 runner.
     runs-on: native-linux-amd64
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
-        with: { ref: ${{ inputs.source_revision }}, fetch-depth: 0 }
-      - name: Require governed source identity
-        run: test "$(git rev-parse HEAD)" = 6e3fd90834309213aca32f2ff5fb0b027661c39a
+        with: { ref: creator-signal/main, fetch-depth: 0 }
+      - name: Require current protected GitHub release source
+        env: { SOURCE_REVISION: "${{ inputs.source_revision }}" }
+        run: |
+          [[ "$SOURCE_REVISION" =~ ^[0-9a-f]{40}$ ]]
+          github_branch=https://api.github.com/repos/creator-signal/fork-henrygd-beszel/branches/creator-signal%2Fmain
+          curl --fail --proto '=https' --proto-redir '=https' --max-redirs 0 "$github_branch" -o github-main.json
+          jq -e --arg source "$SOURCE_REVISION" 'type == "object" and .protected == true and (.commit.sha | type == "string") and .commit.sha == $source' github-main.json >/dev/null
+          test "$(git rev-parse HEAD)" = "$SOURCE_REVISION"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          curl --fail --proto '=https' --proto-redir '=https' --max-redirs 0 "https://raw.githubusercontent.com/creator-signal/fork-henrygd-beszel/$SOURCE_REVISION/.forgejo/workflows/beszel-agent-qualification.yml" -o trusted-workflow.yml
+          cmp trusted-workflow.yml .forgejo/workflows/beszel-agent-qualification.yml
+          git merge-base --is-ancestor 6e3fd90834309213aca32f2ff5fb0b027661c39a HEAD
       - name: Test and build agent
         run: |
+          test "$(uname -m)" = x86_64
+          test "$(go env GOVERSION)" = go1.26.6
+          mkdir -p internal/site/dist
+          printf '<!doctype html><title>qualification</title>' > internal/site/dist/index.html
           go test ./agent ./agent/health ./internal/cmd/agent
+          go test -tags=testing ./internal/hub -run '^TestAgentWebSocketIntegration$' -count=1
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=true -o out/beszel-agent ./internal/cmd/agent
           ./out/beszel-agent --version
+          CREATOR_SIGNAL_QUALIFIED_AGENT_BINARY="$PWD/out/beszel-agent" go test -tags=testing ./internal/hub -run '^TestCreatorSignalQualifiedBinary$' -count=1
           tar -C out -czf out/beszel-agent_linux_amd64.tar.gz beszel-agent
           sha256sum out/beszel-agent out/beszel-agent_linux_amd64.tar.gz > out/SHA256SUMS
       - name: Produce SPDX SBOM
-        run: syft packages dir:. -o spdx-json=out/beszel-agent_linux_amd64.spdx.json
-      - uses: actions/upload-artifact@0b7f8abb1508181956e8e162db84b466c27e18ce # v4
-        with: { name: beszel-agent-linux-amd64-${{ inputs.source_revision }}, path: out, if-no-files-found: error }
+        run: |
+          python3 scripts/creator-signal/generate_spdx.py --binary out/beszel-agent --output out/beszel-agent_linux_amd64.spdx.json
+          source_revision=$(git rev-parse HEAD)
+          archive_sha256=$(sha256sum out/beszel-agent_linux_amd64.tar.gz | cut -d' ' -f1)
+          binary_sha256=$(sha256sum out/beszel-agent | cut -d' ' -f1)
+          sbom_sha256=$(sha256sum out/beszel-agent_linux_amd64.spdx.json | cut -d' ' -f1)
+          printf '{"sourceRevision":"%s","archiveSha256":"%s","binarySha256":"%s","sbomSha256":"%s","nativeAgentSmoke":"pass","hubHandshake":"pass","metrics":"pass","runnerLabel":"native-linux-amd64"}\n' "$source_revision" "$archive_sha256" "$binary_sha256" "$sbom_sha256" > out/qualification.json
+          tar -C out -czf out/beszel-agent-linux-amd64-qualification.tar.gz beszel-agent_linux_amd64.tar.gz beszel-agent_linux_amd64.spdx.json qualification.json SHA256SUMS
+      # Forgejo Actions uses its compatible v3 action endpoint; GitHub v4 is not supported here.
+      - uses: https://data.forgejo.org/actions/upload-artifact@v3
+        with: { name: "beszel-agent-linux-amd64-${{ inputs.source_revision }}", path: out/beszel-agent-linux-amd64-qualification.tar.gz, if-no-files-found: error }

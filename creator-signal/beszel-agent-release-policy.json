@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "manifestSchema": "creator-signal.beszel-agent-release/v1",
   "upstream": {
-    "repository": "https://github.com/henrygd/beszel.git",
+    "repository": "henrygd/beszel",
     "tag": "v0.18.7",
     "revision": "6e3fd90834309213aca32f2ff5fb0b027661c39a"
   },
@@ -23,6 +23,11 @@
   "supplyChain": {
     "sbomFormat": "spdx-json",
     "provenance": "github-artifact-attestation",
+    "manifestSignature": {
+      "algorithm": "Ed25519",
+      "file": "creator-signal-beszel-agent-release.signature.json",
+      "publicKeyEncoding": "SPKI DER SHA-256"
+    },
     "publication": "github-release-after-forgejo-qualification"
   }
 }

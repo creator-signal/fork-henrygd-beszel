@@ -1,0 +1,20 @@
+name: Report Beszel upstream synchronization
+
+on:
+  schedule: [{ cron: '17 4 * * *' }]
+  workflow_dispatch:
+
+permissions: { contents: read }
+
+jobs:
+  report:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with: { fetch-depth: 0, persist-credentials: false }
+      - name: Report immutable source and current upstream head
+        run: |
+          git ls-remote https://github.com/henrygd/beszel.git refs/tags/v0.18.7 refs/heads/main | tee upstream-sync-report.txt
+          grep -q '^6e3fd90834309213aca32f2ff5fb0b027661c39a' upstream-sync-report.txt
+      - uses: actions/upload-artifact@0b7f8abb1508181956e8e162db84b466c27e18ce # v4
+        with: { name: beszel-upstream-sync-${{ github.run_id }}, path: upstream-sync-report.txt }

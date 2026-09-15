@@ -1,0 +1,19 @@
+name: Validate Creator Signal release controls
+
+on:
+  pull_request:
+    branches: [creator-signal/develop, creator-signal/main]
+  push:
+    branches: [creator-signal/develop, creator-signal/main]
+
+permissions: { contents: read }
+
+jobs:
+  controls:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+      - run: |
+          python3 scripts/creator-signal/test_beszel_release_control.py
+          python3 scripts/creator-signal/beszel_release_control.py
+          test "$(git ls-remote https://github.com/henrygd/beszel.git 'refs/tags/v0.18.7^{}' | cut -f1)" = 6e3fd90834309213aca32f2ff5fb0b027661c39a

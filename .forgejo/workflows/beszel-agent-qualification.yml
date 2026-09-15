@@ -25,6 +25,7 @@ jobs:
           go test ./internal/hub -run TestAgentWebSocketIntegration -count=1
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=true -o out/beszel-agent ./internal/cmd/agent
           ./out/beszel-agent --version
+          CREATOR_SIGNAL_QUALIFIED_AGENT_BINARY="$PWD/out/beszel-agent" go test -tags=testing ./internal/hub -run '^TestCreatorSignalQualifiedBinary$' -count=1
           tar -C out -czf out/beszel-agent_linux_amd64.tar.gz beszel-agent
           sha256sum out/beszel-agent out/beszel-agent_linux_amd64.tar.gz > out/SHA256SUMS
       - name: Produce SPDX SBOM

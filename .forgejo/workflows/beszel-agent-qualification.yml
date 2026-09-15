@@ -8,14 +8,22 @@ on:
 
 jobs:
   qualify:
+    # Requires a separately registered protected Forgejo native Linux amd64 runner.
     runs-on: native-linux-amd64
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
-        with: { ref: "${{ inputs.source_revision }}", fetch-depth: 0 }
-      - name: Require governed source identity
+        with: { ref: creator-signal/main, fetch-depth: 0 }
+      - name: Require current protected GitHub release source
         env: { SOURCE_REVISION: "${{ inputs.source_revision }}" }
         run: |
+          [[ "$SOURCE_REVISION" =~ ^[0-9a-f]{40}$ ]]
+          github_branch=https://api.github.com/repos/creator-signal/fork-henrygd-beszel/branches/creator-signal%2Fmain
+          curl --fail --proto '=https' --proto-redir '=https' --max-redirs 0 "$github_branch" -o github-main.json
+          jq -e --arg source "$SOURCE_REVISION" 'type == "object" and .protected == true and (.commit.sha | type == "string") and .commit.sha == $source' github-main.json >/dev/null
           test "$(git rev-parse HEAD)" = "$SOURCE_REVISION"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          curl --fail --proto '=https' --proto-redir '=https' --max-redirs 0 "https://raw.githubusercontent.com/creator-signal/fork-henrygd-beszel/$SOURCE_REVISION/.forgejo/workflows/beszel-agent-qualification.yml" -o trusted-workflow.yml
+          cmp trusted-workflow.yml .forgejo/workflows/beszel-agent-qualification.yml
           git merge-base --is-ancestor 6e3fd90834309213aca32f2ff5fb0b027661c39a HEAD
       - name: Test and build agent
         run: |

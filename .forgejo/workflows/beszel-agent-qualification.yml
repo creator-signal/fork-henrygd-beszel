@@ -19,7 +19,8 @@ jobs:
           git merge-base --is-ancestor 6e3fd90834309213aca32f2ff5fb0b027661c39a HEAD
       - name: Test and build agent
         run: |
-          test "$(go env GOVERSION)" = go1.26.1
+          test "$(uname -m)" = x86_64
+          test "$(go env GOVERSION)" = go1.26.6
           go test ./agent ./agent/health ./internal/cmd/agent
           go test ./internal/hub -run TestAgentWebSocketIntegration -count=1
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=true -o out/beszel-agent ./internal/cmd/agent

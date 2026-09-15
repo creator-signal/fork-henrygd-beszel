@@ -23,6 +23,11 @@
   "supplyChain": {
     "sbomFormat": "spdx-json",
     "provenance": "github-artifact-attestation",
+    "manifestSignature": {
+      "algorithm": "Ed25519",
+      "file": "creator-signal-beszel-agent-release.signature.json",
+      "publicKeyEncoding": "SPKI DER SHA-256"
+    },
     "publication": "github-release-after-forgejo-qualification"
   }
 }

@@ -32,7 +32,9 @@ def validate(policy_path, manifest_path=None, directory=None):
         raise ValueError("manifest schema mismatch")
     if not re.fullmatch(policy["downstreamTagPattern"], manifest["releaseTag"]):
         raise ValueError("release tag is not an explicit immutable downstream identity")
-    if manifest["sourceRevision"] != policy["upstream"]["revision"] or manifest["upstream"] != policy["upstream"]:
+    if not re.fullmatch(r"[0-9a-f]{40}", manifest["sourceRevision"]):
+        raise ValueError("source revision must be an exact downstream commit SHA")
+    if manifest["upstream"] != policy["upstream"]:
         raise ValueError("source identity does not match the governed upstream tag")
     artifact = manifest["artifacts"].get("linux-amd64")
     if not isinstance(artifact, dict) or artifact.get("name") != policy["artifact"]["name"]:

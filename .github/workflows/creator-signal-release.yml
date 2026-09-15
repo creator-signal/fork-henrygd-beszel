@@ -18,8 +18,10 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with: { ref: creator-signal/main, fetch-depth: 0 }
       - name: Verify source and release request
+        id: source
         run: |
-          test "$(git rev-parse HEAD)" = 6e3fd90834309213aca32f2ff5fb0b027661c39a
+          git merge-base --is-ancestor 6e3fd90834309213aca32f2ff5fb0b027661c39a HEAD
+          echo "revision=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           python3 scripts/creator-signal/beszel_release_control.py --policy creator-signal/beszel-agent-release-policy.json
           [[ '${{ inputs.release_tag }}' =~ ^v0\.18\.7-cs\.[1-9][0-9]*$ ]]
       - name: Download exact Forgejo-qualified artifact
@@ -39,9 +41,29 @@ jobs:
           import json, pathlib, hashlib, os
           asset=pathlib.Path('release/beszel-agent_linux_amd64.tar.gz'); binary=pathlib.Path('release/beszel-agent')
           digest=lambda p: hashlib.sha256(p.read_bytes()).hexdigest()
-          print(json.dumps({'schema':'creator-signal.beszel-agent-release/v1','releaseTag':'${{ inputs.release_tag }}','sourceRevision':'6e3fd90834309213aca32f2ff5fb0b027661c39a','upstream':{'repository':'https://github.com/henrygd/beszel.git','tag':'v0.18.7','revision':'6e3fd90834309213aca32f2ff5fb0b027661c39a'},'artifacts':{'linux-amd64':{'name':asset.name,'sha256':digest(asset),'size':asset.stat().st_size,'binarySha256':digest(binary)}},'provenance':{'type':'github-artifact-attestation'},'sbom':{'format':'spdx-json','name':'beszel-agent_linux_amd64.spdx.json'},'qualification':{'forgejoRunUrl':'${{ inputs.forgejo_run_url }}','hubTag':'v0.18.7','hubRevision':'6e3fd90834309213aca32f2ff5fb0b027661c39a'}}, sort_keys=True))
+          print(json.dumps({'schema':'creator-signal.beszel-agent-release/v1','releaseTag':'${{ inputs.release_tag }}','sourceRevision':'${{ steps.source.outputs.revision }}','upstream':{'repository':'https://github.com/henrygd/beszel.git','tag':'v0.18.7','revision':'6e3fd90834309213aca32f2ff5fb0b027661c39a'},'artifacts':{'linux-amd64':{'name':asset.name,'sha256':digest(asset),'size':asset.stat().st_size,'binarySha256':digest(binary)}},'provenance':{'type':'github-artifact-attestation'},'sbom':{'format':'spdx-json','name':'beszel-agent_linux_amd64.spdx.json'},'qualification':{'forgejoRunUrl':'${{ inputs.forgejo_run_url }}','sourceRevision':'${{ steps.source.outputs.revision }}','runnerLabel':'native-linux-amd64','hubTag':'v0.18.7','hubRevision':'6e3fd90834309213aca32f2ff5fb0b027661c39a'}}, sort_keys=True))
           PY
           python3 scripts/creator-signal/beszel_release_control.py --manifest release/creator-signal-beszel-agent-release.json --directory release
+      - name: Sign manifest bytes with the governed Ed25519 key
+        env:
+          PRIVATE_KEY: ${{ secrets.BESZEL_RELEASE_ED25519_PRIVATE_KEY }}
+          PUBLIC_KEY: ${{ secrets.BESZEL_RELEASE_ED25519_PUBLIC_KEY }}
+        run: |
+          test -n "$PRIVATE_KEY" && test -n "$PUBLIC_KEY"
+          umask 077
+          printf '%s' "$PRIVATE_KEY" > release/signing-private.pem
+          printf '%s' "$PUBLIC_KEY" > release/signing-public.pem
+          openssl pkeyutl -sign -rawin -inkey release/signing-private.pem -in release/creator-signal-beszel-agent-release.json -out release/manifest.signature
+          manifest_sha256=$(sha256sum release/creator-signal-beszel-agent-release.json | cut -d' ' -f1)
+          public_key_sha256=$(openssl pkey -pubin -in release/signing-public.pem -pubout -outform DER | sha256sum | cut -d' ' -f1)
+          signature=$(base64 --wrap=0 release/manifest.signature)
+          python3 - <<PY > release/creator-signal-beszel-agent-release.signature.json
+          import json
+          print(json.dumps({'algorithm':'Ed25519','signature':'$signature','manifestSha256':'$manifest_sha256','sourceRevision':'${{ steps.source.outputs.revision }}','publicKeySha256':'$public_key_sha256'}, sort_keys=True))
+          PY
+          openssl pkeyutl -verify -pubin -inkey release/signing-public.pem -rawin -in release/creator-signal-beszel-agent-release.json -sigfile release/manifest.signature
+          rm release/signing-private.pem release/signing-public.pem release/manifest.signature
+          sha256sum release/* > release/SHA256SUMS
       - uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a
         with: { subject-path: release/beszel-agent_linux_amd64.tar.gz }
       - uses: actions/attest-sbom@4651f806c01d8637787e274ac3bdf724ef169f34
@@ -52,4 +74,6 @@ jobs:
           gh release create "$TAG" release/* --verify-tag --title "Beszel Agent $TAG (Creator Signal)"
           mkdir published && gh release download "$TAG" --dir published
           cmp release/beszel-agent_linux_amd64.tar.gz published/beszel-agent_linux_amd64.tar.gz
+          cmp release/creator-signal-beszel-agent-release.json published/creator-signal-beszel-agent-release.json
+          cmp release/creator-signal-beszel-agent-release.signature.json published/creator-signal-beszel-agent-release.signature.json
           gh attestation verify published/beszel-agent_linux_amd64.tar.gz --repo "$GITHUB_REPOSITORY" --predicate-type https://slsa.dev/provenance/v1

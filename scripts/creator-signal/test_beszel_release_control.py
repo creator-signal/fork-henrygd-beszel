@@ -9,7 +9,7 @@ POLICY = ROOT / "creator-signal/beszel-agent-release-policy.json"
 
 class ReleaseControlTest(unittest.TestCase):
     def manifest(self):
-        return {"schema":"creator-signal.beszel-agent-release/v1","releaseTag":"v0.18.7-cs.1","sourceRevision":"6e3fd90834309213aca32f2ff5fb0b027661c39a","upstream":{"repository":"https://github.com/henrygd/beszel.git","tag":"v0.18.7","revision":"6e3fd90834309213aca32f2ff5fb0b027661c39a"},"artifacts":{"linux-amd64":{"name":"beszel-agent_linux_amd64.tar.gz","sha256":"x","size":1,"binarySha256":"y"}},"provenance":{"type":"github-artifact-attestation"},"sbom":{"format":"spdx-json"},"qualification":{"hubTag":"v0.18.7"}}
+        return {"schema":"creator-signal.beszel-agent-release/v1","releaseTag":"v0.18.7-cs.1","sourceRevision":"41c5ccbb54cb9c58a6f6f428dded9418dd9c4307","upstream":{"repository":"https://github.com/henrygd/beszel.git","tag":"v0.18.7","revision":"6e3fd90834309213aca32f2ff5fb0b027661c39a"},"artifacts":{"linux-amd64":{"name":"beszel-agent_linux_amd64.tar.gz","sha256":"x","size":1,"binarySha256":"y"}},"provenance":{"type":"github-artifact-attestation"},"sbom":{"format":"spdx-json"},"qualification":{"hubTag":"v0.18.7"}}
     def test_policy_is_valid(self): validate(POLICY)
     def test_rejects_upstream_release_identity(self):
         with tempfile.TemporaryDirectory() as directory:

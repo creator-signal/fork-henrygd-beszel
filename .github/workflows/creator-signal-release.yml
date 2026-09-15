@@ -18,7 +18,7 @@ jobs:
         with: { ref: creator-signal/main, fetch-depth: 0 }
       - name: Verify source and release request
         id: source
-        env: { RELEASE_TAG: ${{ inputs.release_tag }}, WORKFLOW_REF: ${{ github.workflow_ref }}, GH_TOKEN: ${{ github.token }} }
+        env: { RELEASE_TAG: "${{ inputs.release_tag }}", WORKFLOW_REF: "${{ github.workflow_ref }}", GH_TOKEN: "${{ github.token }}" }
         run: |
           test "$GITHUB_REF" = refs/heads/creator-signal/main
           test "$WORKFLOW_REF" = "$GITHUB_REPOSITORY/.github/workflows/creator-signal-release.yml@refs/heads/creator-signal/main"
@@ -28,21 +28,22 @@ jobs:
           python3 scripts/creator-signal/beszel_release_control.py --policy creator-signal/beszel-agent-release-policy.json
           [[ "$RELEASE_TAG" =~ ^v0\.18\.7-cs\.[1-9][0-9]*$ ]]
       - name: Download the fixed Forgejo run artifact
-        env: { RUN_ID: ${{ inputs.forgejo_run_id }}, EXPECTED: ${{ inputs.forgejo_artifact_zip_sha256 }}, FORGEJO_RELEASE_TOKEN: ${{ secrets.FORGEJO_RELEASE_TOKEN }}, SOURCE_REVISION: ${{ steps.source.outputs.revision }} }
+        env: { RUN_ID: "${{ inputs.forgejo_run_id }}", EXPECTED: "${{ inputs.forgejo_artifact_zip_sha256 }}", FORGEJO_RELEASE_TOKEN: "${{ secrets.FORGEJO_RELEASE_TOKEN }}", SOURCE_REVISION: "${{ steps.source.outputs.revision }}" }
         run: |
           test -n "$FORGEJO_RELEASE_TOKEN"
           [[ "$RUN_ID" =~ ^[1-9][0-9]*$ ]] && [[ "$EXPECTED" =~ ^[0-9a-f]{64}$ ]]
           base=https://forge.creatorsignal.me:14110/api/v1/repos/creator-signal/fork-henrygd-beszel
           curl --fail --proto '=https' --proto-redir '=https' --max-redirs 0 --header "Authorization: token $FORGEJO_RELEASE_TOKEN" "$base/actions/runs/$RUN_ID" -o run.json
-          test "$(jq -r .status run.json)" = success && test "$(jq -r .commit_sha run.json)" = "$SOURCE_REVISION"
+          jq -e --arg source "$SOURCE_REVISION" 'type == "object" and (.status | type == "string") and (.commit_sha | type == "string") and .status == "success" and .commit_sha == $source' run.json >/dev/null
           curl --fail --proto '=https' --proto-redir '=https' --max-redirs 0 --header "Authorization: token $FORGEJO_RELEASE_TOKEN" "$base/actions/runs/$RUN_ID/artifacts" -o artifacts.json
-          artifact_id=$(jq -r '.artifacts[] | select(.name == "beszel-agent-linux-amd64-" + env.SOURCE_REVISION and .expired != true) | .id' artifacts.json)
+          jq -e --arg source "$SOURCE_REVISION" 'type == "object" and (.artifacts | type == "array") and ([.artifacts[] | select((.name | type == "string") and .name == "beszel-agent-linux-amd64-" + $source and .expired != true and (.id | type == "number"))] | length == 1)' artifacts.json >/dev/null
+          artifact_id=$(jq -r --arg source "$SOURCE_REVISION" '.artifacts[] | select(.name == "beszel-agent-linux-amd64-" + $source and .expired != true) | .id' artifacts.json)
           [[ "$artifact_id" =~ ^[1-9][0-9]*$ ]]
           mkdir release
           curl --fail --proto '=https' --proto-redir '=https' --max-redirs 0 --header "Authorization: token $FORGEJO_RELEASE_TOKEN" "$base/actions/artifacts/$artifact_id" -o release/forgejo-qualified.zip
           python3 scripts/creator-signal/forgejo_bundle.py --run-id "$RUN_ID" --source-revision "$SOURCE_REVISION" --zip-sha256 "$EXPECTED" --archive release/forgejo-qualified.zip --output release
       - name: Verify Forgejo qualification evidence binds the artifact
-        env: { SOURCE_REVISION: ${{ steps.source.outputs.revision }}, FORGEJO_RUN_ID: ${{ inputs.forgejo_run_id }} }
+        env: { SOURCE_REVISION: "${{ steps.source.outputs.revision }}", FORGEJO_RUN_ID: "${{ inputs.forgejo_run_id }}" }
         run: |
           [[ "$FORGEJO_RUN_ID" =~ ^[1-9][0-9]*$ ]]
           test "$(jq -r .sourceRevision release/qualification.json)" = "$SOURCE_REVISION"
@@ -54,10 +55,10 @@ jobs:
           test "$(jq -r .sbomSha256 release/qualification.json)" = "$(sha256sum release/beszel-agent_linux_amd64.spdx.json | cut -d' ' -f1)"
       - name: Create immutable manifest and SBOM
         env:
-          RELEASE_TAG: ${{ inputs.release_tag }}
-          SOURCE_REVISION: ${{ steps.source.outputs.revision }}
-          FORGEJO_RUN_ID: ${{ inputs.forgejo_run_id }}
-          FORGEJO_ZIP_SHA256: ${{ inputs.forgejo_artifact_zip_sha256 }}
+          RELEASE_TAG: "${{ inputs.release_tag }}"
+          SOURCE_REVISION: "${{ steps.source.outputs.revision }}"
+          FORGEJO_RUN_ID: "${{ inputs.forgejo_run_id }}"
+          FORGEJO_ZIP_SHA256: "${{ inputs.forgejo_artifact_zip_sha256 }}"
         run: |
           python3 scripts/creator-signal/forgejo_bundle.py --run-id "$FORGEJO_RUN_ID" --source-revision "$SOURCE_REVISION" --zip-sha256 "$FORGEJO_ZIP_SHA256" --archive release/forgejo-qualified.zip --output release
           tar -xzf release/beszel-agent_linux_amd64.tar.gz -C release
@@ -71,9 +72,9 @@ jobs:
           python3 scripts/creator-signal/beszel_release_control.py --manifest release/creator-signal-beszel-agent-release.json --directory release
       - name: Sign manifest bytes with the governed Ed25519 key
         env:
-          PRIVATE_KEY: ${{ secrets.BESZEL_RELEASE_ED25519_PRIVATE_KEY }}
-          PUBLIC_KEY: ${{ secrets.BESZEL_RELEASE_ED25519_PUBLIC_KEY }}
-          SOURCE_REVISION: ${{ steps.source.outputs.revision }}
+          PRIVATE_KEY: "${{ secrets.BESZEL_RELEASE_ED25519_PRIVATE_KEY }}"
+          PUBLIC_KEY: "${{ secrets.BESZEL_RELEASE_ED25519_PUBLIC_KEY }}"
+          SOURCE_REVISION: "${{ steps.source.outputs.revision }}"
         run: |
           test -n "$PRIVATE_KEY" && test -n "$PUBLIC_KEY"
           umask 077
@@ -95,13 +96,13 @@ jobs:
       - uses: actions/attest-sbom@4651f806c01d8637787e274ac3bdf724ef169f34
         with: { subject-path: release/beszel-agent_linux_amd64.tar.gz, sbom-path: release/beszel-agent_linux_amd64.spdx.json }
       - name: Create the immutable downstream source tag
-        env: { TAG: ${{ inputs.release_tag }}, SOURCE_REVISION: ${{ steps.source.outputs.revision }} }
+        env: { TAG: "${{ inputs.release_tag }}", SOURCE_REVISION: "${{ steps.source.outputs.revision }}" }
         run: |
           test -z "$(git ls-remote --tags origin "refs/tags/$TAG")"
           git tag -a "$TAG" "$SOURCE_REVISION" -m "Creator Signal Beszel Agent $TAG"
           git push origin "refs/tags/$TAG"
       - name: Publish release and independently pull back bytes
-        env: { GH_TOKEN: ${{ github.token }}, TAG: ${{ inputs.release_tag }} }
+        env: { GH_TOKEN: "${{ github.token }}", TAG: "${{ inputs.release_tag }}" }
         run: |
           gh release create "$TAG" release/beszel-agent_linux_amd64.tar.gz release/beszel-agent_linux_amd64.spdx.json release/beszel-agent.binary.sha256 release/creator-signal-beszel-agent-release.json release/creator-signal-beszel-agent-release.signature.json release/SHA256SUMS --verify-tag --title "Beszel Agent $TAG (Creator Signal)"
           mkdir published && gh release download "$TAG" --dir published

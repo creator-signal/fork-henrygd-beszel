@@ -11,9 +11,9 @@ jobs:
     runs-on: native-linux-amd64
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
-        with: { ref: ${{ inputs.source_revision }}, fetch-depth: 0 }
+        with: { ref: "${{ inputs.source_revision }}", fetch-depth: 0 }
       - name: Require governed source identity
-        env: { SOURCE_REVISION: ${{ inputs.source_revision }} }
+        env: { SOURCE_REVISION: "${{ inputs.source_revision }}" }
         run: |
           test "$(git rev-parse HEAD)" = "$SOURCE_REVISION"
           git merge-base --is-ancestor 6e3fd90834309213aca32f2ff5fb0b027661c39a HEAD
@@ -21,6 +21,8 @@ jobs:
         run: |
           test "$(uname -m)" = x86_64
           test "$(go env GOVERSION)" = go1.26.6
+          mkdir -p internal/site/dist
+          printf '<!doctype html><title>qualification</title>' > internal/site/dist/index.html
           go test ./agent ./agent/health ./internal/cmd/agent
           go test ./internal/hub -run TestAgentWebSocketIntegration -count=1
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=true -o out/beszel-agent ./internal/cmd/agent
@@ -39,4 +41,4 @@ jobs:
           tar -C out -czf out/beszel-agent-linux-amd64-qualification.tar.gz beszel-agent_linux_amd64.tar.gz beszel-agent_linux_amd64.spdx.json qualification.json SHA256SUMS
       # Forgejo Actions uses its compatible v3 action endpoint; GitHub v4 is not supported here.
       - uses: https://data.forgejo.org/actions/upload-artifact@v3
-        with: { name: beszel-agent-linux-amd64-${{ inputs.source_revision }}, path: out/beszel-agent-linux-amd64-qualification.tar.gz, if-no-files-found: error }
+        with: { name: "beszel-agent-linux-amd64-${{ inputs.source_revision }}", path: out/beszel-agent-linux-amd64-qualification.tar.gz, if-no-files-found: error }

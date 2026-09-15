@@ -18,8 +18,11 @@ jobs:
         with: { ref: creator-signal/main, fetch-depth: 0 }
       - name: Verify source and release request
         id: source
-        env: { RELEASE_TAG: ${{ inputs.release_tag }} }
+        env: { RELEASE_TAG: ${{ inputs.release_tag }}, WORKFLOW_REF: ${{ github.workflow_ref }}, GH_TOKEN: ${{ github.token }} }
         run: |
+          test "$GITHUB_REF" = refs/heads/creator-signal/main
+          test "$WORKFLOW_REF" = "$GITHUB_REPOSITORY/.github/workflows/creator-signal-release.yml@refs/heads/creator-signal/main"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/branches/creator-signal/main" --jq .protected)" = true
           git merge-base --is-ancestor 6e3fd90834309213aca32f2ff5fb0b027661c39a HEAD
           echo "revision=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           python3 scripts/creator-signal/beszel_release_control.py --policy creator-signal/beszel-agent-release-policy.json

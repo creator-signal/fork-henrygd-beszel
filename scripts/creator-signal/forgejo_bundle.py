@@ -15,8 +15,9 @@ def digest(path):
 
 def safe_extract(archive, destination):
     with zipfile.ZipFile(archive) as bundle:
-        names = set(bundle.namelist())
-        if names != FILES or any(name.startswith(("/", "\\")) or ".." in pathlib.PurePosixPath(name).parts for name in names):
+        entries = bundle.infolist()
+        names = [entry.filename for entry in entries]
+        if len(names) != len(set(names)) or set(names) != FILES or any(name.startswith(("/", "\\")) or ".." in pathlib.PurePosixPath(name).parts for name in names):
             raise ValueError("Forgejo artifact has an unsafe or unexpected ZIP inventory")
         info = bundle.getinfo("beszel-agent-linux-amd64-qualification.tar.gz")
         if info.file_size > 64 * 1024 * 1024 or info.compress_size > 64 * 1024 * 1024:
@@ -27,9 +28,20 @@ def safe_extract_tar(archive, destination):
     allowed={"beszel-agent_linux_amd64.tar.gz","beszel-agent_linux_amd64.spdx.json","qualification.json","SHA256SUMS"}
     with tarfile.open(archive, "r:gz") as bundle:
         members=bundle.getmembers()
-        if {m.name for m in members} != allowed or any(not m.isfile() or m.size > 64 * 1024 * 1024 or m.name.startswith('/') or '..' in pathlib.PurePosixPath(m.name).parts for m in members):
+        names = [member.name for member in members]
+        if len(names) != len(set(names)) or set(names) != allowed or any(not m.isfile() or m.size > 64 * 1024 * 1024 or m.name.startswith('/') or '..' in pathlib.PurePosixPath(m.name).parts for m in members):
             raise ValueError("qualification tar has an unsafe or unexpected inventory")
         bundle.extractall(destination, members=members, filter='data')
+
+def validate_agent_archive(archive):
+    with tarfile.open(archive, "r:gz") as bundle:
+        members = bundle.getmembers()
+        names = [member.name for member in members]
+        if len(names) != 1 or len(names) != len(set(names)) or names != ["beszel-agent"]:
+            raise ValueError("agent archive has an unexpected inventory")
+        member = members[0]
+        if not member.isfile() or member.size == 0 or member.size > 64 * 1024 * 1024:
+            raise ValueError("agent archive has an unsafe binary member")
 
 def main(args):
     if not RUN.fullmatch(args.run_id): raise ValueError("Forgejo run ID is invalid")
@@ -39,6 +51,7 @@ def main(args):
     output = pathlib.Path(args.output); output.mkdir(parents=True, exist_ok=True)
     safe_extract(args.archive, output)
     safe_extract_tar(output / "beszel-agent-linux-amd64-qualification.tar.gz", output)
+    validate_agent_archive(output / "beszel-agent_linux_amd64.tar.gz")
     print(json.dumps({"runId": args.run_id, "bundle": "beszel-agent-linux-amd64-qualification.tar.gz"}))
 
 if __name__ == "__main__":

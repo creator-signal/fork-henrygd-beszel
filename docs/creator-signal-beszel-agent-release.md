@@ -1,0 +1,7 @@
+# Creator Signal Beszel Agent releases
+
+`creator-signal/develop` carries Creator Signal automation derived from the immutable upstream `v0.18.7` source. `main` remains the unmodified upstream mirror; `creator-signal/main` is the reviewed downstream release source. Upstream refs are fetched separately and never overwritten by downstream automation.
+
+Only `beszel-agent_linux_amd64.tar.gz` is eligible. The release tag is explicit (`v0.18.7-cs.N`) and its release manifest follows `creator-signal.beszel-agent-release/v1`. It records upstream and downstream source identity, archive and extracted-binary SHA-256 values, size, SPDX SBOM/provenance references, and native Linux amd64/HUB v0.18.7 qualification references.
+
+Forgejo runs the native Linux amd64 build and qualification. GitHub remains source, merge and publication authority. The GitHub publication workflow requires an exact Forgejo artifact URL, matching SHA-256 and the `FORGEJO_RELEASE_TOKEN` secret, then creates GitHub artifact attestations, publishes the assets, downloads them independently, compares the bytes and verifies provenance. No workflow registers an agent, changes a host, creates a Hub, or mutates an environment.

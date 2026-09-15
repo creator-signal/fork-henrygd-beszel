@@ -3,6 +3,7 @@
 package hub
 
 import (
+	"bytes"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -12,10 +13,24 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pocketbase/pocketbase/core"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh"
 )
+
+type boundedLog struct{ bytes.Buffer }
+
+func (b *boundedLog) Write(p []byte) (int, error) {
+	const limit = 65536
+	remaining := limit - b.Len()
+	if remaining > 0 {
+		if len(p) > remaining {
+			_, _ = b.Buffer.Write(p[:remaining])
+		} else {
+			_, _ = b.Buffer.Write(p)
+		}
+	}
+	return len(p), nil
+}
 
 // TestCreatorSignalQualifiedBinary connects the exact compiled release binary
 // to a real temporary Hub WebSocket endpoint and requires a persisted up state.
@@ -49,17 +64,23 @@ func TestCreatorSignalQualifiedBinary(t *testing.T) {
 	defer server.Close()
 	data := t.TempDir()
 	cmd := exec.Command(binary, "--key", string(ssh.MarshalAuthorizedKey(key)), "--url", server.URL, "--token", "qualified-token", "--listen", "127.0.0.1:45876")
-	cmd.Env = append(os.Environ(), "BESZEL_AGENT_DATA_DIR="+filepath.Join(data, "agent"), "BESZEL_AGENT_DISABLE_SSH=true")
+	logs := &boundedLog{}
+	cmd.Stdout, cmd.Stderr = logs, logs
+	cmd.Env = append(os.Environ(), "BESZEL_AGENT_DATA_DIR="+filepath.Join(data, "agent"), "BESZEL_AGENT_DISABLE_SSH=true", "DOCKER_HOST=")
 	require.NoError(t, cmd.Start())
 	defer func() { _ = cmd.Process.Kill(); _, _ = cmd.Process.Wait() }()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		record, findErr := app.FindRecordById("systems", system.Id)
 		require.NoError(t, findErr)
-		if record.GetString("status") == "up" {
+		stats, statsErr := app.FindRecordsByFilter("system_stats", "system = {:system}", "", 1, 0, map[string]any{"system": system.Id})
+		require.NoError(t, statsErr)
+		fingerprint, fingerprintErr := app.FindRecordsByFilter("fingerprints", "system = {:system}", "", 1, 0, map[string]any{"system": system.Id})
+		require.NoError(t, fingerprintErr)
+		if record.GetString("status") == "up" && len(stats) == 1 && len(fingerprint) == 1 && fingerprint[0].GetString("fingerprint") != "" {
 			return
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	t.Fatal(fmt.Errorf("qualified binary did not complete Hub WebSocket handshake and metrics registration"))
+	t.Fatal(fmt.Errorf("qualified binary did not complete Hub WebSocket handshake, metric persistence, and fingerprint enrollment: %s", logs.String()))
 }

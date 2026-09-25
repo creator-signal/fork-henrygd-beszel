@@ -24,11 +24,11 @@ jobs:
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           curl --fail --proto '=https' --proto-redir '=https' --max-redirs 0 "https://raw.githubusercontent.com/creator-signal/fork-henrygd-beszel/$SOURCE_REVISION/.forgejo/workflows/beszel-agent-qualification.yml" -o trusted-workflow.yml
           cmp trusted-workflow.yml .forgejo/workflows/beszel-agent-qualification.yml
-          git merge-base --is-ancestor 6e3fd90834309213aca32f2ff5fb0b027661c39a HEAD
+          git merge-base --is-ancestor a0dc19eacf6902d2f6934a3efd7ea7277198c40b HEAD
       - name: Test and build agent
         run: |
           test "$(uname -m)" = x86_64
-          test "$(go env GOVERSION)" = go1.26.6
+          test "$(go env GOVERSION)" = go1.27.1
           mkdir -p internal/site/dist
           printf '<!doctype html><title>qualification</title>' > internal/site/dist/index.html
           go test ./agent ./agent/health ./internal/cmd/agent

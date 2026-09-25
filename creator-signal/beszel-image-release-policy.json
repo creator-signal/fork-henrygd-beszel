@@ -3,11 +3,11 @@
   "manifestSchema": "creator-signal.beszel-image-release/v1",
   "upstream": {
     "repository": "henrygd/beszel",
-    "tag": "v0.18.7",
-    "revision": "6e3fd90834309213aca32f2ff5fb0b027661c39a"
+    "tag": "v0.20.0",
+    "revision": "a0dc19eacf6902d2f6934a3efd7ea7277198c40b"
   },
   "releaseBranch": "creator-signal/main",
-  "downstreamTagPattern": "^v0\\.18\\.7-cs\\.[1-9][0-9]*$",
+  "downstreamTagPattern": "^v0\\.20\\.0-cs\\.[1-9][0-9]*$",
   "images": {
     "hub": { "repository": "ghcr.io/creator-signal/beszel-hub", "dockerfile": "internal/dockerfile_hub" },
     "agent": { "repository": "ghcr.io/creator-signal/beszel-agent", "dockerfile": "internal/dockerfile_agent" }

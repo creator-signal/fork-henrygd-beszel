@@ -12,7 +12,7 @@ class ImageReleaseControlTest(unittest.TestCase):
     def manifest(self):
         source = "41c5ccbb54cb9c58a6f6f428dded9418dd9c4307"
         image = lambda repository, digest: {"repository": repository, "digest": digest * 64, "platforms": ["linux/amd64", "linux/arm64"]}
-        return {"schema": "creator-signal.beszel-image-release/v1", "releaseTag": "v0.18.7-cs.1", "sourceRevision": source, "upstream": {"repository": "henrygd/beszel", "tag": "v0.18.7", "revision": "6e3fd90834309213aca32f2ff5fb0b027661c39a"}, "images": {"hub": image("ghcr.io/creator-signal/beszel-hub", "a"), "agent": image("ghcr.io/creator-signal/beszel-agent", "b")}, "supplyChain": {"provenance": "slsa-buildkit", "sbomFormat": "spdx-json"}}
+        return {"schema": "creator-signal.beszel-image-release/v1", "releaseTag": "v0.20.0-cs.1", "sourceRevision": source, "upstream": {"repository": "henrygd/beszel", "tag": "v0.20.0", "revision": "a0dc19eacf6902d2f6934a3efd7ea7277198c40b"}, "images": {"hub": image("ghcr.io/creator-signal/beszel-hub", "a"), "agent": image("ghcr.io/creator-signal/beszel-agent", "b")}, "supplyChain": {"provenance": "slsa-buildkit", "sbomFormat": "spdx-json"}}
 
     def test_policy_is_valid(self):
         validate(POLICY)

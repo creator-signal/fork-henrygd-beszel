@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "manifestSchema": "creator-signal.beszel-image-release/v1",
+  "upstream": {
+    "repository": "henrygd/beszel",
+    "tag": "v0.18.7",
+    "revision": "6e3fd90834309213aca32f2ff5fb0b027661c39a"
+  },
+  "releaseBranch": "creator-signal/main",
+  "downstreamTagPattern": "^v0\\.18\\.7-cs\\.[1-9][0-9]*$",
+  "images": {
+    "hub": { "repository": "ghcr.io/creator-signal/beszel-hub", "dockerfile": "internal/dockerfile_hub" },
+    "agent": { "repository": "ghcr.io/creator-signal/beszel-agent", "dockerfile": "internal/dockerfile_agent" }
+  },
+  "platforms": ["linux/amd64", "linux/arm64"],
+  "supplyChain": {
+    "sbomFormat": "spdx-json",
+    "provenance": "slsa-buildkit",
+    "publication": "github-actions-after-signed-agent-release",
+    "immutableTags": ["release-tag", "source-sha"]
+  }
+}

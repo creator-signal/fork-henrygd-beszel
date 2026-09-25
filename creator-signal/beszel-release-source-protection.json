@@ -1,0 +1,9 @@
+{
+  "branch": "creator-signal/main",
+  "requiredChecks": ["Validate Creator Signal release controls / controls"],
+  "requirePullRequest": true,
+  "requiredApprovals": 0,
+  "enforceAdmins": true,
+  "allowForcePushes": false,
+  "allowDeletions": false
+}

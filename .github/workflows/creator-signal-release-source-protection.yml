@@ -1,0 +1,22 @@
+name: Configure Creator Signal release source protection
+
+on:
+  workflow_dispatch:
+
+permissions: { contents: read }
+
+jobs:
+  configure:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with: { ref: creator-signal/main, persist-credentials: false }
+      - name: Apply the reviewed release-source protection contract
+        env: { GH_TOKEN: "${{ secrets.CREATOR_SIGNAL_REPOSITORY_ADMIN_TOKEN }}" }
+        run: |
+          test -n "$GH_TOKEN"
+          jq -e '(.branch == "creator-signal/main") and (.requiredChecks | type == "array" and length > 0) and (.requiredApprovals == 0) and (.enforceAdmins == true) and (.allowForcePushes == false) and (.allowDeletions == false)' creator-signal/beszel-release-source-protection.json >/dev/null
+          jq -n --slurpfile contract creator-signal/beszel-release-source-protection.json '{required_status_checks: {strict: true, contexts: $contract[0].requiredChecks}, enforce_admins: true, required_pull_request_reviews: {required_approving_review_count: $contract[0].requiredApprovals}, restrictions: null, required_linear_history: false, allow_force_pushes: false, allow_deletions: false, block_creations: false, required_conversation_resolution: true, lock_branch: false, allow_fork_syncing: false}' > protection.json
+          gh api --method PUT "repos/$GITHUB_REPOSITORY/branches/creator-signal%2Fmain/protection" --input protection.json >/dev/null
+          gh api "repos/$GITHUB_REPOSITORY/branches/creator-signal%2Fmain/protection" > applied-protection.json
+          jq -e --slurpfile contract creator-signal/beszel-release-source-protection.json '(.required_status_checks.contexts | sort) == ($contract[0].requiredChecks | sort) and .required_pull_request_reviews.required_approving_review_count == $contract[0].requiredApprovals and .enforce_admins.enabled == $contract[0].enforceAdmins and .allow_force_pushes.enabled == $contract[0].allowForcePushes and .allow_deletions.enabled == $contract[0].allowDeletions' applied-protection.json >/dev/null

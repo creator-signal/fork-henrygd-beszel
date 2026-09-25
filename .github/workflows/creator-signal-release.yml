@@ -1,202 +1,91 @@
-name: Publish governed Beszel Agent release
+name: Creator Signal CI
 
 on:
   workflow_dispatch:
     inputs:
-      operation:
+      release_tag:
+        description: Immutable Creator Signal release tag, for example v0.18.7-cs.1
         required: true
-        type: choice
-        options: [publish-agent, qualify-and-publish, publish-images]
-      release_tag: { required: false, type: string }
-      forgejo_run_id: { required: false, type: string }
-      forgejo_artifact_zip_sha256: { required: false, type: string }
+        type: string
+  push:
+    tags:
+      - "v*-cs.*"
 
-permissions: { contents: read }
+permissions:
+  contents: write
+  packages: write
+  attestations: write
+  id-token: write
 
 jobs:
-  publish:
-    if: inputs.operation == 'publish-agent' || inputs.operation == 'qualify-and-publish'
-    # The published release is admitted only from a runner with private Forgejo connectivity.
-    runs-on: [self-hosted, Linux, X64, beszel-release-control]
-    permissions: { contents: write, id-token: write, attestations: write }
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
-        with: { ref: creator-signal/main, fetch-depth: 0 }
-      - name: Verify source and release request
-        id: source
-        env: { RELEASE_TAG: "${{ inputs.release_tag }}", WORKFLOW_REF: "${{ github.workflow_ref }}", GH_TOKEN: "${{ github.token }}" }
-        run: |
-          test "$GITHUB_REF" = refs/heads/creator-signal/main
-          test "$WORKFLOW_REF" = "$GITHUB_REPOSITORY/.github/workflows/creator-signal-release.yml@refs/heads/creator-signal/main"
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          git merge-base --is-ancestor 6e3fd90834309213aca32f2ff5fb0b027661c39a HEAD
-          echo "revision=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-          python3 scripts/creator-signal/beszel_release_control.py --policy creator-signal/beszel-agent-release-policy.json
-          [[ "$RELEASE_TAG" =~ ^v0\.18\.7-cs\.[1-9][0-9]*$ ]]
-      - name: Bootstrap and qualify the exact Forgejo source
-        id: qualification
-        if: inputs.operation == 'qualify-and-publish'
-        env:
-          FORGEJO_RELEASE_TOKEN: "${{ secrets.FORGEJO_RELEASE_TOKEN }}"
-          SOURCE_REVISION: "${{ steps.source.outputs.revision }}"
-        run: |
-          test -n "$FORGEJO_RELEASE_TOKEN"
-          base=https://forge.creatorsignal.me:14110/api/v1
-          repository=creator-signal/fork-henrygd-beszel
-          auth=(--header "Authorization: token $FORGEJO_RELEASE_TOKEN")
-          status=$(curl --silent --show-error --output repository.json --write-out '%{http_code}' --proto '=https' --proto-redir '=https' --max-redirs 0 "${auth[@]}" "$base/repos/$repository")
-          if [ "$status" = 404 ]; then
-            python3 - <<'PY' > migration.json
-          import json
-          print(json.dumps({'clone_addr':'https://github.com/creator-signal/fork-henrygd-beszel.git','repo_name':'fork-henrygd-beszel','repo_owner':'creator-signal','mirror':False,'private':True,'service':'git'}))
-          PY
-            curl --fail --proto '=https' --proto-redir '=https' --max-redirs 0 "${auth[@]}" --header 'Content-Type: application/json' --data-binary @migration.json "$base/repos/migrate" -o repository.json
-          elif [ "$status" != 200 ]; then
-            exit 1
-          fi
-          curl --fail --proto '=https' --proto-redir '=https' --max-redirs 0 "${auth[@]}" --header 'Content-Type: application/json' --request PATCH --data '{"has_actions":true}' "$base/repos/$repository" -o repository-actions.json
-          jq -e '.has_actions == true and .mirror != true' repository-actions.json >/dev/null
-          curl --fail --proto '=https' --proto-redir '=https' --max-redirs 0 "${auth[@]}" --header 'Content-Type: application/json' --request POST --data "{\"ref\":\"creator-signal/main\",\"inputs\":{\"source_revision\":\"$SOURCE_REVISION\"}}" "$base/repos/$repository/actions/workflows/beszel-agent-qualification.yml/dispatches"
-          run_id=''
-          for attempt in $(seq 1 60); do
-            curl --fail --proto '=https' --proto-redir '=https' --max-redirs 0 "${auth[@]}" "$base/repos/$repository/actions/runs?limit=100" -o runs.json
-            run_id=$(jq -r --arg source "$SOURCE_REVISION" '[.workflow_runs[] | select(.workflow_id == "beszel-agent-qualification.yml" and (.event_payload | fromjson? | .inputs.source_revision? == $source)) | .id] | max // empty' runs.json)
-            [ -n "$run_id" ] && break
-            sleep 5
-          done
-          [[ "$run_id" =~ ^[1-9][0-9]*$ ]]
-          for attempt in $(seq 1 120); do
-            curl --fail --proto '=https' --proto-redir '=https' --max-redirs 0 "${auth[@]}" "$base/repos/$repository/actions/runs/$run_id" -o run.json
-            status=$(jq -r .status run.json)
-            [ "$status" = success ] && break
-            [ "$status" = failure ] || [ "$status" = cancelled ] && exit 1
-            sleep 10
-          done
-          test "$(jq -r .status run.json)" = success
-          curl --fail --proto '=https' --proto-redir '=https' --max-redirs 0 "${auth[@]}" "$base/repos/$repository/actions/runs/$run_id/artifacts" -o artifacts.json
-          artifact_id=$(jq -r --arg source "$SOURCE_REVISION" '.artifacts[] | select(.name == "beszel-agent-linux-amd64-" + $source and .expired != true) | .id' artifacts.json)
-          [[ "$artifact_id" =~ ^[1-9][0-9]*$ ]]
-          curl --fail --proto '=https' --proto-redir '=https' --max-redirs 0 "${auth[@]}" "$base/actions/artifacts/$artifact_id" -o qualification.zip
-          printf 'run_id=%s\nzip_sha256=%s\n' "$run_id" "$(sha256sum qualification.zip | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
-      - name: Download the fixed Forgejo run artifact
-        env: { RUN_ID: "${{ steps.qualification.outputs.run_id || inputs.forgejo_run_id }}", EXPECTED: "${{ steps.qualification.outputs.zip_sha256 || inputs.forgejo_artifact_zip_sha256 }}", FORGEJO_RELEASE_TOKEN: "${{ secrets.FORGEJO_RELEASE_TOKEN }}", SOURCE_REVISION: "${{ steps.source.outputs.revision }}" }
-        run: |
-          test -n "$FORGEJO_RELEASE_TOKEN"
-          [[ "$RUN_ID" =~ ^[1-9][0-9]*$ ]] && [[ "$EXPECTED" =~ ^[0-9a-f]{64}$ ]]
-          base=https://forge.creatorsignal.me:14110/api/v1/repos/creator-signal/fork-henrygd-beszel
-          curl --fail --proto '=https' --proto-redir '=https' --max-redirs 0 --header "Authorization: token $FORGEJO_RELEASE_TOKEN" "$base/actions/runs/$RUN_ID" -o run.json
-          jq -e --arg source "$SOURCE_REVISION" 'type == "object" and (.status | type == "string") and (.commit_sha | type == "string") and (.workflow_id | type == "string") and .status == "success" and .commit_sha == $source and .workflow_id == "beszel-agent-qualification.yml"' run.json >/dev/null
-          curl --fail --proto '=https' --proto-redir '=https' --max-redirs 0 --header "Authorization: token $FORGEJO_RELEASE_TOKEN" "$base/actions/runs/$RUN_ID/artifacts" -o artifacts.json
-          jq -e --arg source "$SOURCE_REVISION" 'type == "object" and (.artifacts | type == "array") and ([.artifacts[] | select((.name | type == "string") and .name == "beszel-agent-linux-amd64-" + $source and .expired != true and (.id | type == "number"))] | length == 1)' artifacts.json >/dev/null
-          artifact_id=$(jq -r --arg source "$SOURCE_REVISION" '.artifacts[] | select(.name == "beszel-agent-linux-amd64-" + $source and .expired != true) | .id' artifacts.json)
-          [[ "$artifact_id" =~ ^[1-9][0-9]*$ ]]
-          mkdir release
-          curl --fail --proto '=https' --proto-redir '=https' --max-redirs 0 --header "Authorization: token $FORGEJO_RELEASE_TOKEN" "$base/actions/artifacts/$artifact_id" -o release/forgejo-qualified.zip
-          python3 scripts/creator-signal/forgejo_bundle.py --run-id "$RUN_ID" --source-revision "$SOURCE_REVISION" --zip-sha256 "$EXPECTED" --archive release/forgejo-qualified.zip --output release
-      - name: Verify Forgejo qualification evidence binds the artifact
-        env: { SOURCE_REVISION: "${{ steps.source.outputs.revision }}", FORGEJO_RUN_ID: "${{ inputs.forgejo_run_id }}" }
-        run: |
-          [[ "$FORGEJO_RUN_ID" =~ ^[1-9][0-9]*$ ]]
-          test "$(jq -r .sourceRevision release/qualification.json)" = "$SOURCE_REVISION"
-          test "$(jq -r .nativeAgentSmoke release/qualification.json)" = pass
-          test "$(jq -r .hubHandshake release/qualification.json)" = pass
-          test "$(jq -r .metrics release/qualification.json)" = pass
-          test "$(jq -r .archiveSha256 release/qualification.json)" = "$(sha256sum release/beszel-agent_linux_amd64.tar.gz | cut -d' ' -f1)"
-          test "$(jq -r .binarySha256 release/qualification.json)" = "$(tar -xOf release/beszel-agent_linux_amd64.tar.gz beszel-agent | sha256sum | cut -d' ' -f1)"
-          test "$(jq -r .sbomSha256 release/qualification.json)" = "$(sha256sum release/beszel-agent_linux_amd64.spdx.json | cut -d' ' -f1)"
-      - name: Create immutable manifest and SBOM
-        env:
-          RELEASE_TAG: "${{ inputs.release_tag }}"
-          SOURCE_REVISION: "${{ steps.source.outputs.revision }}"
-          FORGEJO_RUN_ID: "${{ inputs.forgejo_run_id }}"
-          FORGEJO_ZIP_SHA256: "${{ inputs.forgejo_artifact_zip_sha256 }}"
-        run: |
-          python3 scripts/creator-signal/forgejo_bundle.py --run-id "$FORGEJO_RUN_ID" --source-revision "$SOURCE_REVISION" --zip-sha256 "$FORGEJO_ZIP_SHA256" --archive release/forgejo-qualified.zip --output release
-          tar -xzf release/beszel-agent_linux_amd64.tar.gz -C release
-          sha256sum release/beszel-agent > release/beszel-agent.binary.sha256
-          python3 - <<'PY' > release/creator-signal-beszel-agent-release.json
-          import json, pathlib, hashlib, os
-          asset=pathlib.Path('release/beszel-agent_linux_amd64.tar.gz'); binary=pathlib.Path('release/beszel-agent')
-          digest=lambda p: hashlib.sha256(p.read_bytes()).hexdigest()
-          print(json.dumps({'schema':'creator-signal.beszel-agent-release/v1','releaseTag':os.environ['RELEASE_TAG'],'sourceRevision':os.environ['SOURCE_REVISION'],'upstream':{'repository':'henrygd/beszel','tag':'v0.18.7','revision':'6e3fd90834309213aca32f2ff5fb0b027661c39a'},'artifacts':{'linux-amd64':{'name':asset.name,'sha256':digest(asset),'size':asset.stat().st_size,'binarySha256':digest(binary)}},'provenance':{'type':'github-artifact-attestation'},'sbom':{'format':'spdx-json','name':'beszel-agent_linux_amd64.spdx.json','sha256':digest(pathlib.Path('release/beszel-agent_linux_amd64.spdx.json'))},'qualification':{'forgejoRunId':os.environ['FORGEJO_RUN_ID'],'sourceRevision':os.environ['SOURCE_REVISION'],'runnerLabel':'native-linux-amd64','nativeAgentSmoke':'pass','hubHandshake':'pass','metrics':'pass','hubTag':'v0.18.7','hubRevision':'6e3fd90834309213aca32f2ff5fb0b027661c39a'}}, sort_keys=True))
-          PY
-          python3 scripts/creator-signal/beszel_release_control.py --manifest release/creator-signal-beszel-agent-release.json --directory release
-      - name: Sign manifest bytes with the governed Ed25519 key
-        env:
-          PRIVATE_KEY: "${{ secrets.BESZEL_RELEASE_ED25519_PRIVATE_KEY }}"
-          PUBLIC_KEY: "${{ secrets.BESZEL_RELEASE_ED25519_PUBLIC_KEY }}"
-          SOURCE_REVISION: "${{ steps.source.outputs.revision }}"
-        run: |
-          test -n "$PRIVATE_KEY" && test -n "$PUBLIC_KEY"
-          umask 077
-          private_key=$(mktemp); public_key=$(mktemp); signature_file=$(mktemp)
-          trap 'rm -f "$private_key" "$public_key" "$signature_file"' EXIT
-          printf '%s' "$PRIVATE_KEY" > "$private_key"; printf '%s' "$PUBLIC_KEY" > "$public_key"
-          openssl pkeyutl -sign -rawin -inkey "$private_key" -in release/creator-signal-beszel-agent-release.json -out "$signature_file"
-          manifest_sha256=$(sha256sum release/creator-signal-beszel-agent-release.json | cut -d' ' -f1)
-          public_key_sha256=$(openssl pkey -pubin -in "$public_key" -pubout -outform DER | sha256sum | cut -d' ' -f1)
-          signature=$(base64 --wrap=0 "$signature_file")
-          python3 - <<PY > release/creator-signal-beszel-agent-release.signature.json
-          import json, os
-          print(json.dumps({'algorithm':'Ed25519','signature':'$signature','manifestSha256':'$manifest_sha256','sourceRevision':os.environ['SOURCE_REVISION'],'publicKeySha256':'$public_key_sha256'}, sort_keys=True))
-          PY
-          openssl pkeyutl -verify -pubin -inkey "$public_key" -rawin -in release/creator-signal-beszel-agent-release.json -sigfile "$signature_file"
-          sha256sum release/beszel-agent_linux_amd64.tar.gz release/beszel-agent_linux_amd64.spdx.json release/beszel-agent.binary.sha256 release/creator-signal-beszel-agent-release.json release/creator-signal-beszel-agent-release.signature.json > release/SHA256SUMS
-      - uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a
-        with: { subject-path: release/beszel-agent_linux_amd64.tar.gz }
-      - uses: actions/attest-sbom@4651f806c01d8637787e274ac3bdf724ef169f34
-        with: { subject-path: release/beszel-agent_linux_amd64.tar.gz, sbom-path: release/beszel-agent_linux_amd64.spdx.json }
-      - name: Create the immutable downstream source tag
-        env: { TAG: "${{ inputs.release_tag }}", SOURCE_REVISION: "${{ steps.source.outputs.revision }}" }
-        run: |
-          test -z "$(git ls-remote --tags origin "refs/tags/$TAG")"
-          git config user.name "creator-signal-release[bot]"
-          git config user.email "creator-signal-release[bot]@users.noreply.github.com"
-          git tag -a "$TAG" "$SOURCE_REVISION" -m "Creator Signal Beszel Agent $TAG"
-          git push origin "refs/tags/$TAG"
-      - name: Publish release and independently pull back bytes
-        env: { GH_TOKEN: "${{ github.token }}", TAG: "${{ inputs.release_tag }}" }
-        run: |
-          gh release create "$TAG" release/beszel-agent_linux_amd64.tar.gz release/beszel-agent_linux_amd64.spdx.json release/beszel-agent.binary.sha256 release/creator-signal-beszel-agent-release.json release/creator-signal-beszel-agent-release.signature.json release/SHA256SUMS --verify-tag --title "Beszel Agent $TAG (Creator Signal)"
-          mkdir published && gh release download "$TAG" --dir published
-          cmp release/beszel-agent_linux_amd64.tar.gz published/beszel-agent_linux_amd64.tar.gz
-          cmp release/creator-signal-beszel-agent-release.json published/creator-signal-beszel-agent-release.json
-          cmp release/creator-signal-beszel-agent-release.signature.json published/creator-signal-beszel-agent-release.signature.json
-          gh attestation verify published/beszel-agent_linux_amd64.tar.gz --repo "$GITHUB_REPOSITORY" --predicate-type https://slsa.dev/provenance/v1
-  publish-images:
-    if: inputs.operation == 'publish-images'
+  release:
+    name: Release binaries and images
     runs-on: ubuntu-24.04
-    permissions:
-      contents: write
-      packages: write
-      id-token: write
-      attestations: write
-      security-events: write
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-        with: { ref: creator-signal/main, fetch-depth: 0, persist-credentials: false }
-      - name: Verify immutable signed source release
-        env: { GH_TOKEN: "${{ github.token }}", RELEASE_TAG: "${{ inputs.release_tag }}", WORKFLOW_REF: "${{ github.workflow_ref }}" }
+      - name: Checkout the release source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_tag || github.ref_name }}
+          fetch-depth: 0
+
+      - name: Verify release identity
+        id: release
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
         run: |
-          test "$GITHUB_REF" = refs/heads/creator-signal/main
-          test "$WORKFLOW_REF" = "$GITHUB_REPOSITORY/.github/workflows/creator-signal-release.yml@refs/heads/creator-signal/main"
+          set -euo pipefail
           [[ "$RELEASE_TAG" =~ ^v0\.18\.7-cs\.[1-9][0-9]*$ ]]
           git fetch --force origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
-          test "$(git rev-parse "$RELEASE_TAG^{}")" = "$GITHUB_SHA"
-          mkdir release
-          gh release download "$RELEASE_TAG" --pattern creator-signal-beszel-agent-release.json --dir release
-          test "$(jq -r .releaseTag release/creator-signal-beszel-agent-release.json)" = "$RELEASE_TAG"
-          test "$(jq -r .sourceRevision release/creator-signal-beszel-agent-release.json)" = "$GITHUB_SHA"
-          python3 scripts/creator-signal/beszel_release_control.py --manifest release/creator-signal-beszel-agent-release.json
-          python3 scripts/creator-signal/beszel_image_release_control.py
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
+          test "$(git rev-parse "$RELEASE_TAG^{}")" = "$(git rev-parse HEAD)"
+          printf 'tag=%s\nrevision=%s\n' "$RELEASE_TAG" "$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Build the Hub web assets
+        run: |
+          bun install --no-save --cwd ./internal/site
+          bun run --cwd ./internal/site build
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "^1.22.1"
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "9.0.x"
+
+      - name: Build the Windows sensor helper
+        run: dotnet build -c Release ./agent/lhm/beszel_lhm.csproj
+
+      - name: Publish binary packages to the GitHub release
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          workdir: ./
+          distribution: goreleaser
+          version: latest
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          IS_FORK: "true"
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ github.token }}
-      - name: Build and publish immutable Hub image
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Publish Hub image
         id: hub
         uses: docker/build-push-action@v5
         with:
@@ -206,8 +95,11 @@ jobs:
           push: true
           provenance: mode=max
           sbom: true
-          tags: ghcr.io/creator-signal/beszel-hub:${{ inputs.release_tag }},ghcr.io/creator-signal/beszel-hub:sha-${{ github.sha }}
-      - name: Build and publish immutable Agent image
+          tags: |
+            ghcr.io/${{ github.repository }}/beszel:${{ steps.release.outputs.tag }}
+            ghcr.io/${{ github.repository }}/beszel:sha-${{ steps.release.outputs.revision }}
+
+      - name: Publish Agent image
         id: agent
         uses: docker/build-push-action@v5
         with:
@@ -217,34 +109,37 @@ jobs:
           push: true
           provenance: mode=max
           sbom: true
-          tags: ghcr.io/creator-signal/beszel-agent:${{ inputs.release_tag }},ghcr.io/creator-signal/beszel-agent:sha-${{ github.sha }}
-      - name: Scan published Hub image
-        uses: anchore/scan-action@v7
-        with:
-          image: ghcr.io/creator-signal/beszel-hub@${{ steps.hub.outputs.digest }}
-          fail-build: true
-          severity-cutoff: high
-          output-format: sarif
-          output-file: hub-vulnerabilities.sarif
-      - name: Scan published Agent image
-        uses: anchore/scan-action@v7
-        with:
-          image: ghcr.io/creator-signal/beszel-agent@${{ steps.agent.outputs.digest }}
-          fail-build: true
-          severity-cutoff: high
-          output-format: sarif
-          output-file: agent-vulnerabilities.sarif
-      - uses: github/codeql-action/upload-sarif@v3
-        if: always()
-        with: { sarif_file: . }
-      - name: Publish image release manifest
-        env: { GH_TOKEN: "${{ github.token }}", RELEASE_TAG: "${{ inputs.release_tag }}", SOURCE_REVISION: "${{ github.sha }}", HUB_DIGEST: "${{ steps.hub.outputs.digest }}", AGENT_DIGEST: "${{ steps.agent.outputs.digest }}" }
+          tags: |
+            ghcr.io/${{ github.repository }}/beszel-agent:${{ steps.release.outputs.tag }}
+            ghcr.io/${{ github.repository }}/beszel-agent:sha-${{ steps.release.outputs.revision }}
+
+      - name: Attach the source and image manifest
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          SOURCE_REVISION: ${{ steps.release.outputs.revision }}
+          HUB_DIGEST: ${{ steps.hub.outputs.digest }}
+          AGENT_DIGEST: ${{ steps.agent.outputs.digest }}
         run: |
-          python3 - <<'PY' > creator-signal-beszel-images.json
+          set -euo pipefail
+          python3 - <<'PY' > creator-signal-release-manifest.json
           import json, os
-          image = lambda repository, digest: {"repository": repository, "digest": digest.removeprefix("sha256:"), "platforms": ["linux/amd64", "linux/arm64"]}
-          print(json.dumps({"schema": "creator-signal.beszel-image-release/v1", "releaseTag": os.environ["RELEASE_TAG"], "sourceRevision": os.environ["SOURCE_REVISION"], "upstream": {"repository": "henrygd/beszel", "tag": "v0.18.7", "revision": "6e3fd90834309213aca32f2ff5fb0b027661c39a"}, "images": {"hub": image("ghcr.io/creator-signal/beszel-hub", os.environ["HUB_DIGEST"]), "agent": image("ghcr.io/creator-signal/beszel-agent", os.environ["AGENT_DIGEST"])}, "supplyChain": {"provenance": "slsa-buildkit", "sbomFormat": "spdx-json"}}, sort_keys=True))
+          image = lambda name, digest: {
+              "repository": f"ghcr.io/{os.environ['GITHUB_REPOSITORY']}/{name}",
+              "digest": digest,
+              "platforms": ["linux/amd64", "linux/arm64"],
+              "sbom": "buildkit-spdx",
+              "provenance": "buildkit-slsa",
+          }
+          print(json.dumps({
+              "schema": "creator-signal.downstream-release/v1",
+              "releaseTag": os.environ["RELEASE_TAG"],
+              "sourceRevision": os.environ["SOURCE_REVISION"],
+              "upstream": {"repository": "henrygd/beszel", "tag": "v0.18.7", "revision": "6e3fd90834309213aca32f2ff5fb0b027661c39a"},
+              "images": {"hub": image("beszel", os.environ["HUB_DIGEST"]), "agent": image("beszel-agent", os.environ["AGENT_DIGEST"])},
+          }, sort_keys=True))
           PY
-          python3 scripts/creator-signal/beszel_image_release_control.py --manifest creator-signal-beszel-images.json
-          sha256sum creator-signal-beszel-images.json > creator-signal-beszel-images.json.sha256
-          gh release upload "$RELEASE_TAG" creator-signal-beszel-images.json creator-signal-beszel-images.json.sha256 --clobber
+          sha256sum creator-signal-release-manifest.json > creator-signal-release-manifest.json.sha256
+          gh release upload "$RELEASE_TAG" creator-signal-release-manifest.json creator-signal-release-manifest.json.sha256 --clobber
+          gh release edit "$RELEASE_TAG" --draft=false --title "Creator Signal Beszel $RELEASE_TAG"

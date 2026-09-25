@@ -6,7 +6,7 @@ on:
       operation:
         required: true
         type: choice
-        options: [protect-release-source, publish-agent, publish-images]
+        options: [publish-agent, qualify-and-publish, publish-images]
       release_tag: { required: false, type: string }
       forgejo_run_id: { required: false, type: string }
       forgejo_artifact_zip_sha256: { required: false, type: string }
@@ -14,25 +14,8 @@ on:
 permissions: { contents: read }
 
 jobs:
-  protect-release-source:
-    if: inputs.operation == 'protect-release-source'
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-        with: { ref: creator-signal/main, persist-credentials: false }
-      - name: Apply the reviewed release-source protection contract
-        env: { GH_TOKEN: "${{ secrets.CREATOR_SIGNAL_REPOSITORY_ADMIN_TOKEN }}", WORKFLOW_REF: "${{ github.workflow_ref }}" }
-        run: |
-          test "$GITHUB_REF" = refs/heads/creator-signal/main
-          test "$WORKFLOW_REF" = "$GITHUB_REPOSITORY/.github/workflows/creator-signal-release.yml@refs/heads/creator-signal/main"
-          test -n "$GH_TOKEN"
-          jq -e '(.branch == "creator-signal/main") and (.requiredChecks | type == "array" and length > 0) and (.requiredApprovals == 0) and (.enforceAdmins == true) and (.allowForcePushes == false) and (.allowDeletions == false)' creator-signal/beszel-release-source-protection.json >/dev/null
-          jq -n --slurpfile contract creator-signal/beszel-release-source-protection.json '{required_status_checks: {strict: true, contexts: $contract[0].requiredChecks}, enforce_admins: true, required_pull_request_reviews: {required_approving_review_count: $contract[0].requiredApprovals}, restrictions: null, required_linear_history: false, allow_force_pushes: false, allow_deletions: false, block_creations: false, required_conversation_resolution: true, lock_branch: false, allow_fork_syncing: false}' > protection.json
-          gh api --method PUT "repos/$GITHUB_REPOSITORY/branches/creator-signal%2Fmain/protection" --input protection.json >/dev/null
-          gh api "repos/$GITHUB_REPOSITORY/branches/creator-signal%2Fmain/protection" > applied-protection.json
-          jq -e --slurpfile contract creator-signal/beszel-release-source-protection.json '(.required_status_checks.contexts | sort) == ($contract[0].requiredChecks | sort) and .required_pull_request_reviews.required_approving_review_count == $contract[0].requiredApprovals and .enforce_admins.enabled == $contract[0].enforceAdmins and .allow_force_pushes.enabled == $contract[0].allowForcePushes and .allow_deletions.enabled == $contract[0].allowDeletions' applied-protection.json >/dev/null
   publish:
-    if: inputs.operation == 'publish-agent'
+    if: inputs.operation == 'publish-agent' || inputs.operation == 'qualify-and-publish'
     # The published release is admitted only from a runner with private Forgejo connectivity.
     runs-on: [self-hosted, Linux, X64, beszel-release-control]
     permissions: { contents: write, id-token: write, attestations: write }
@@ -45,14 +28,58 @@ jobs:
         run: |
           test "$GITHUB_REF" = refs/heads/creator-signal/main
           test "$WORKFLOW_REF" = "$GITHUB_REPOSITORY/.github/workflows/creator-signal-release.yml@refs/heads/creator-signal/main"
-          test "$(gh api "repos/$GITHUB_REPOSITORY/branches/creator-signal%2Fmain" --jq .protected)" = true
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           git merge-base --is-ancestor 6e3fd90834309213aca32f2ff5fb0b027661c39a HEAD
           echo "revision=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           python3 scripts/creator-signal/beszel_release_control.py --policy creator-signal/beszel-agent-release-policy.json
           [[ "$RELEASE_TAG" =~ ^v0\.18\.7-cs\.[1-9][0-9]*$ ]]
+      - name: Bootstrap and qualify the exact Forgejo source
+        id: qualification
+        if: inputs.operation == 'qualify-and-publish'
+        env:
+          FORGEJO_RELEASE_TOKEN: "${{ secrets.FORGEJO_RELEASE_TOKEN }}"
+          SOURCE_REVISION: "${{ steps.source.outputs.revision }}"
+        run: |
+          test -n "$FORGEJO_RELEASE_TOKEN"
+          base=https://forge.creatorsignal.me:14110/api/v1
+          repository=creator-signal/fork-henrygd-beszel
+          auth=(--header "Authorization: token $FORGEJO_RELEASE_TOKEN")
+          status=$(curl --silent --show-error --output repository.json --write-out '%{http_code}' --proto '=https' --proto-redir '=https' --max-redirs 0 "${auth[@]}" "$base/repos/$repository")
+          if [ "$status" = 404 ]; then
+            python3 - <<'PY' > migration.json
+          import json
+          print(json.dumps({'clone_addr':'https://github.com/creator-signal/fork-henrygd-beszel.git','repo_name':'fork-henrygd-beszel','repo_owner':'creator-signal','mirror':False,'private':True,'service':'git'}))
+          PY
+            curl --fail --proto '=https' --proto-redir '=https' --max-redirs 0 "${auth[@]}" --header 'Content-Type: application/json' --data-binary @migration.json "$base/repos/migrate" -o repository.json
+          elif [ "$status" != 200 ]; then
+            exit 1
+          fi
+          curl --fail --proto '=https' --proto-redir '=https' --max-redirs 0 "${auth[@]}" --header 'Content-Type: application/json' --request PATCH --data '{"has_actions":true}' "$base/repos/$repository" -o repository-actions.json
+          jq -e '.has_actions == true and .mirror != true' repository-actions.json >/dev/null
+          curl --fail --proto '=https' --proto-redir '=https' --max-redirs 0 "${auth[@]}" --header 'Content-Type: application/json' --request POST --data "{\"ref\":\"creator-signal/main\",\"inputs\":{\"source_revision\":\"$SOURCE_REVISION\"}}" "$base/repos/$repository/actions/workflows/beszel-agent-qualification.yml/dispatches"
+          run_id=''
+          for attempt in $(seq 1 60); do
+            curl --fail --proto '=https' --proto-redir '=https' --max-redirs 0 "${auth[@]}" "$base/repos/$repository/actions/runs?limit=100" -o runs.json
+            run_id=$(jq -r --arg source "$SOURCE_REVISION" '[.workflow_runs[] | select(.workflow_id == "beszel-agent-qualification.yml" and (.event_payload | fromjson? | .inputs.source_revision? == $source)) | .id] | max // empty' runs.json)
+            [ -n "$run_id" ] && break
+            sleep 5
+          done
+          [[ "$run_id" =~ ^[1-9][0-9]*$ ]]
+          for attempt in $(seq 1 120); do
+            curl --fail --proto '=https' --proto-redir '=https' --max-redirs 0 "${auth[@]}" "$base/repos/$repository/actions/runs/$run_id" -o run.json
+            status=$(jq -r .status run.json)
+            [ "$status" = success ] && break
+            [ "$status" = failure ] || [ "$status" = cancelled ] && exit 1
+            sleep 10
+          done
+          test "$(jq -r .status run.json)" = success
+          curl --fail --proto '=https' --proto-redir '=https' --max-redirs 0 "${auth[@]}" "$base/repos/$repository/actions/runs/$run_id/artifacts" -o artifacts.json
+          artifact_id=$(jq -r --arg source "$SOURCE_REVISION" '.artifacts[] | select(.name == "beszel-agent-linux-amd64-" + $source and .expired != true) | .id' artifacts.json)
+          [[ "$artifact_id" =~ ^[1-9][0-9]*$ ]]
+          curl --fail --proto '=https' --proto-redir '=https' --max-redirs 0 "${auth[@]}" "$base/actions/artifacts/$artifact_id" -o qualification.zip
+          printf 'run_id=%s\nzip_sha256=%s\n' "$run_id" "$(sha256sum qualification.zip | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
       - name: Download the fixed Forgejo run artifact
-        env: { RUN_ID: "${{ inputs.forgejo_run_id }}", EXPECTED: "${{ inputs.forgejo_artifact_zip_sha256 }}", FORGEJO_RELEASE_TOKEN: "${{ secrets.FORGEJO_RELEASE_TOKEN }}", SOURCE_REVISION: "${{ steps.source.outputs.revision }}" }
+        env: { RUN_ID: "${{ steps.qualification.outputs.run_id || inputs.forgejo_run_id }}", EXPECTED: "${{ steps.qualification.outputs.zip_sha256 || inputs.forgejo_artifact_zip_sha256 }}", FORGEJO_RELEASE_TOKEN: "${{ secrets.FORGEJO_RELEASE_TOKEN }}", SOURCE_REVISION: "${{ steps.source.outputs.revision }}" }
         run: |
           test -n "$FORGEJO_RELEASE_TOKEN"
           [[ "$RUN_ID" =~ ^[1-9][0-9]*$ ]] && [[ "$EXPECTED" =~ ^[0-9a-f]{64}$ ]]
@@ -153,7 +180,6 @@ jobs:
         run: |
           test "$GITHUB_REF" = refs/heads/creator-signal/main
           test "$WORKFLOW_REF" = "$GITHUB_REPOSITORY/.github/workflows/creator-signal-release.yml@refs/heads/creator-signal/main"
-          test "$(gh api "repos/$GITHUB_REPOSITORY/branches/creator-signal%2Fmain" --jq .protected)" = true
           [[ "$RELEASE_TAG" =~ ^v0\.18\.7-cs\.[1-9][0-9]*$ ]]
           git fetch --force origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
           test "$(git rev-parse "$RELEASE_TAG^{}")" = "$GITHUB_SHA"

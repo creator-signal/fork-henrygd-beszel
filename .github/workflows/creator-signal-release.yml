@@ -91,7 +91,7 @@ jobs:
         with:
           context: ./
           file: ./internal/dockerfile_hub
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64,linux/arm64,linux/arm/v7
           push: true
           provenance: mode=max
           sbom: true
@@ -105,13 +105,55 @@ jobs:
         with:
           context: ./
           file: ./internal/dockerfile_agent
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64,linux/arm64,linux/arm/v7
           push: true
           provenance: mode=max
           sbom: true
           tags: |
             ghcr.io/${{ github.repository }}/beszel-agent:${{ steps.release.outputs.tag }}
             ghcr.io/${{ github.repository }}/beszel-agent:sha-${{ steps.release.outputs.revision }}
+
+      - name: Publish Alpine Agent image
+        id: agent_alpine
+        uses: docker/build-push-action@v5
+        with:
+          context: ./
+          file: ./internal/dockerfile_agent_alpine
+          platforms: linux/amd64,linux/arm64,linux/arm/v7
+          push: true
+          provenance: mode=max
+          sbom: true
+          tags: |
+            ghcr.io/${{ github.repository }}/beszel-agent:${{ steps.release.outputs.tag }}-alpine
+            ghcr.io/${{ github.repository }}/beszel-agent:sha-${{ steps.release.outputs.revision }}-alpine
+
+      - name: Publish NVIDIA Agent image
+        id: agent_nvidia
+        uses: docker/build-push-action@v5
+        with:
+          context: ./
+          file: ./internal/dockerfile_agent_nvidia
+          platforms: linux/amd64
+          push: true
+          provenance: mode=max
+          sbom: true
+          tags: |
+            ghcr.io/${{ github.repository }}/beszel-agent-nvidia:${{ steps.release.outputs.tag }}
+            ghcr.io/${{ github.repository }}/beszel-agent-nvidia:sha-${{ steps.release.outputs.revision }}
+
+      - name: Publish Intel Agent image
+        id: agent_intel
+        uses: docker/build-push-action@v5
+        with:
+          context: ./
+          file: ./internal/dockerfile_agent_intel
+          platforms: linux/amd64
+          push: true
+          provenance: mode=max
+          sbom: true
+          tags: |
+            ghcr.io/${{ github.repository }}/beszel-agent-intel:${{ steps.release.outputs.tag }}
+            ghcr.io/${{ github.repository }}/beszel-agent-intel:sha-${{ steps.release.outputs.revision }}
 
       - name: Attach the source and image manifest
         shell: bash
@@ -121,14 +163,17 @@ jobs:
           SOURCE_REVISION: ${{ steps.release.outputs.revision }}
           HUB_DIGEST: ${{ steps.hub.outputs.digest }}
           AGENT_DIGEST: ${{ steps.agent.outputs.digest }}
+          AGENT_ALPINE_DIGEST: ${{ steps.agent_alpine.outputs.digest }}
+          AGENT_NVIDIA_DIGEST: ${{ steps.agent_nvidia.outputs.digest }}
+          AGENT_INTEL_DIGEST: ${{ steps.agent_intel.outputs.digest }}
         run: |
           set -euo pipefail
           python3 - <<'PY' > creator-signal-release-manifest.json
           import json, os
-          image = lambda name, digest: {
+          image = lambda name, digest, platforms: {
               "repository": f"ghcr.io/{os.environ['GITHUB_REPOSITORY']}/{name}",
               "digest": digest,
-              "platforms": ["linux/amd64", "linux/arm64"],
+              "platforms": platforms,
               "sbom": "buildkit-spdx",
               "provenance": "buildkit-slsa",
           }
@@ -137,7 +182,13 @@ jobs:
               "releaseTag": os.environ["RELEASE_TAG"],
               "sourceRevision": os.environ["SOURCE_REVISION"],
               "upstream": {"repository": "henrygd/beszel", "tag": "v0.18.7", "revision": "6e3fd90834309213aca32f2ff5fb0b027661c39a"},
-              "images": {"hub": image("beszel", os.environ["HUB_DIGEST"]), "agent": image("beszel-agent", os.environ["AGENT_DIGEST"])},
+              "images": {
+                  "hub": image("beszel", os.environ["HUB_DIGEST"], ["linux/amd64", "linux/arm64", "linux/arm/v7"]),
+                  "agent": image("beszel-agent", os.environ["AGENT_DIGEST"], ["linux/amd64", "linux/arm64", "linux/arm/v7"]),
+                  "agentAlpine": image("beszel-agent", os.environ["AGENT_ALPINE_DIGEST"], ["linux/amd64", "linux/arm64", "linux/arm/v7"]),
+                  "agentNvidia": image("beszel-agent-nvidia", os.environ["AGENT_NVIDIA_DIGEST"], ["linux/amd64"]),
+                  "agentIntel": image("beszel-agent-intel", os.environ["AGENT_INTEL_DIGEST"], ["linux/amd64"]),
+              },
           }, sort_keys=True))
           PY
           sha256sum creator-signal-release-manifest.json > creator-signal-release-manifest.json.sha256

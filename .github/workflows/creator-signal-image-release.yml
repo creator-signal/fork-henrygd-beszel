@@ -1,0 +1,95 @@
+name: Publish governed Beszel OCI images
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag: { required: true, type: string }
+
+permissions: { contents: read }
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      packages: write
+      id-token: write
+      attestations: write
+      security-events: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with: { ref: creator-signal/main, fetch-depth: 0, persist-credentials: false }
+      - name: Verify immutable signed source release
+        env: { GH_TOKEN: "${{ github.token }}", RELEASE_TAG: "${{ inputs.release_tag }}", WORKFLOW_REF: "${{ github.workflow_ref }}" }
+        run: |
+          test "$GITHUB_REF" = refs/heads/creator-signal/main
+          test "$WORKFLOW_REF" = "$GITHUB_REPOSITORY/.github/workflows/creator-signal-image-release.yml@refs/heads/creator-signal/main"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/branches/creator-signal%2Fmain" --jq .protected)" = true
+          [[ "$RELEASE_TAG" =~ ^v0\.18\.7-cs\.[1-9][0-9]*$ ]]
+          git fetch --force origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
+          test "$(git rev-parse "$RELEASE_TAG^{}")" = "$GITHUB_SHA"
+          mkdir release
+          gh release download "$RELEASE_TAG" --pattern creator-signal-beszel-agent-release.json --dir release
+          test "$(jq -r .releaseTag release/creator-signal-beszel-agent-release.json)" = "$RELEASE_TAG"
+          test "$(jq -r .sourceRevision release/creator-signal-beszel-agent-release.json)" = "$GITHUB_SHA"
+          python3 scripts/creator-signal/beszel_release_control.py --manifest release/creator-signal-beszel-agent-release.json
+          python3 scripts/creator-signal/beszel_image_release_control.py
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Build and publish immutable Hub image
+        id: hub
+        uses: docker/build-push-action@v5
+        with:
+          context: ./
+          file: ./internal/dockerfile_hub
+          platforms: linux/amd64,linux/arm64
+          push: true
+          provenance: mode=max
+          sbom: true
+          tags: ghcr.io/creator-signal/beszel-hub:${{ inputs.release_tag }},ghcr.io/creator-signal/beszel-hub:sha-${{ github.sha }}
+      - name: Build and publish immutable Agent image
+        id: agent
+        uses: docker/build-push-action@v5
+        with:
+          context: ./
+          file: ./internal/dockerfile_agent
+          platforms: linux/amd64,linux/arm64
+          push: true
+          provenance: mode=max
+          sbom: true
+          tags: ghcr.io/creator-signal/beszel-agent:${{ inputs.release_tag }},ghcr.io/creator-signal/beszel-agent:sha-${{ github.sha }}
+      - name: Scan published images
+        uses: anchore/scan-action@v7
+        with:
+          image: ghcr.io/creator-signal/beszel-hub@${{ steps.hub.outputs.digest }}
+          fail-build: true
+          severity-cutoff: high
+          output-format: sarif
+          output-file: hub-vulnerabilities.sarif
+      - name: Scan published agent image
+        uses: anchore/scan-action@v7
+        with:
+          image: ghcr.io/creator-signal/beszel-agent@${{ steps.agent.outputs.digest }}
+          fail-build: true
+          severity-cutoff: high
+          output-format: sarif
+          output-file: agent-vulnerabilities.sarif
+      - uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with: { sarif_file: . }
+      - name: Publish image release manifest
+        env: { GH_TOKEN: "${{ github.token }}", RELEASE_TAG: "${{ inputs.release_tag }}", SOURCE_REVISION: "${{ github.sha }}", HUB_DIGEST: "${{ steps.hub.outputs.digest }}", AGENT_DIGEST: "${{ steps.agent.outputs.digest }}" }
+        run: |
+          python3 - <<'PY' > creator-signal-beszel-images.json
+          import json, os
+          image = lambda repository, digest: {"repository": repository, "digest": digest.removeprefix("sha256:"), "platforms": ["linux/amd64", "linux/arm64"]}
+          print(json.dumps({"schema": "creator-signal.beszel-image-release/v1", "releaseTag": os.environ["RELEASE_TAG"], "sourceRevision": os.environ["SOURCE_REVISION"], "upstream": {"repository": "henrygd/beszel", "tag": "v0.18.7", "revision": "6e3fd90834309213aca32f2ff5fb0b027661c39a"}, "images": {"hub": image("ghcr.io/creator-signal/beszel-hub", os.environ["HUB_DIGEST"]), "agent": image("ghcr.io/creator-signal/beszel-agent", os.environ["AGENT_DIGEST"])}, "supplyChain": {"provenance": "slsa-buildkit", "sbomFormat": "spdx-json"}}, sort_keys=True))
+          PY
+          python3 scripts/creator-signal/beszel_image_release_control.py --manifest creator-signal-beszel-images.json
+          sha256sum creator-signal-beszel-images.json > creator-signal-beszel-images.json.sha256
+          gh release upload "$RELEASE_TAG" creator-signal-beszel-images.json creator-signal-beszel-images.json.sha256 --clobber

@@ -17,4 +17,6 @@ jobs:
           git ls-remote https://github.com/henrygd/beszel.git refs/tags/v0.20.0 refs/heads/main | tee upstream-sync-report.txt
           grep -q '^a0dc19eacf6902d2f6934a3efd7ea7277198c40b' upstream-sync-report.txt
       - uses: actions/upload-artifact@0b7f8abb1508181956e8e162db84b466c27e18ce # v4
-        with: { name: beszel-upstream-sync-${{ github.run_id }}, path: upstream-sync-report.txt }
+        with:
+          name: beszel-upstream-sync-${{ github.run_id }}
+          path: upstream-sync-report.txt

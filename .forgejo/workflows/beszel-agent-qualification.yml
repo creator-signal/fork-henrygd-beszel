@@ -5,6 +5,9 @@ on:
     inputs:
       source_revision:
         required: true
+      release_tag:
+        description: Published Creator Signal release tag that receives the signed agent manifest, for example v0.20.0-cs.1
+        required: true
 
 jobs:
   qualify:
@@ -50,3 +53,41 @@ jobs:
       # Forgejo Actions uses its compatible v3 action endpoint; GitHub v4 is not supported here.
       - uses: https://data.forgejo.org/actions/upload-artifact@v3
         with: { name: "beszel-agent-linux-amd64-${{ inputs.source_revision }}", path: out/beszel-agent-linux-amd64-qualification.tar.gz, if-no-files-found: error }
+      - name: Install the pinned release signing dependency
+        run: python3 -m pip install --user 'cryptography==49.0.0'
+      - name: Assemble and sign the Creator Signal release manifest
+        env:
+          RELEASE_TAG: "${{ inputs.release_tag }}"
+          FORGEJO_RUN_ID: "${{ github.run_id }}"
+          BESZEL_RELEASE_SIGNING_KEY: "${{ secrets.BESZEL_RELEASE_SIGNING_KEY }}"
+          BESZEL_RELEASE_PUBLIC_KEY_SHA256: "${{ vars.BESZEL_RELEASE_PUBLIC_KEY_SHA256 }}"
+        run: |
+          set -euo pipefail
+          key="$RUNNER_TEMP/beszel-release-signing-key.pem"
+          umask 077
+          printf '%s' "$BESZEL_RELEASE_SIGNING_KEY" > "$key"
+          test -s "$key"
+          python3 scripts/creator-signal/assemble_agent_release.py \
+            --policy creator-signal/beszel-agent-release-policy.json \
+            --qualification-dir out \
+            --release-tag "$RELEASE_TAG" \
+            --forgejo-run-id "$FORGEJO_RUN_ID" \
+            --output out/creator-signal-beszel-agent-release.json
+          python3 scripts/creator-signal/sign_agent_release.py \
+            --manifest out/creator-signal-beszel-agent-release.json \
+            --private-key "$key" \
+            --output out/creator-signal-beszel-agent-release.signature.json
+          rm -f "$key"
+          observed=$(python3 -c "import json;print(json.load(open('out/creator-signal-beszel-agent-release.signature.json'))['publicKeySha256'])")
+          test "$observed" = "$BESZEL_RELEASE_PUBLIC_KEY_SHA256"
+      - name: Publish the signed release manifest to the GitHub release
+        env:
+          GH_TOKEN: "${{ secrets.CREATOR_SIGNAL_RELEASE_TOKEN }}"
+          RELEASE_TAG: "${{ inputs.release_tag }}"
+        run: |
+          set -euo pipefail
+          gh release upload "$RELEASE_TAG" \
+            out/creator-signal-beszel-agent-release.json \
+            out/creator-signal-beszel-agent-release.signature.json \
+            --clobber \
+            --repo creator-signal/fork-henrygd-beszel

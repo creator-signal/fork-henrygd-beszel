@@ -52,3 +52,23 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.TOKEN || secrets.GITHUB_TOKEN }}
           WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
           IS_FORK: ${{ github.repository_owner != 'henrygd' }}
+
+      - name: Extract the released Linux agent
+        run: |
+          set -euo pipefail
+          mkdir -p sbom
+          tar -xzf dist/beszel-agent_linux_amd64.tar.gz -C sbom beszel-agent
+
+      - name: Produce the SPDX SBOM for the Linux agent
+        uses: anchore/sbom-action@v0
+        with:
+          path: sbom/beszel-agent
+          format: spdx-json
+          output-file: beszel-agent_linux_amd64.spdx.json
+          upload-release-assets: false
+          dependency-snapshot: false
+
+      - name: Attach the agent SBOM to the release
+        env:
+          GH_TOKEN: ${{ secrets.TOKEN || secrets.GITHUB_TOKEN }}
+        run: gh release upload "${GITHUB_REF_NAME}" beszel-agent_linux_amd64.spdx.json --clobber

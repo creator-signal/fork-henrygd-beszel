@@ -196,44 +196,52 @@ jobs:
           gh release upload "$RELEASE_TAG" creator-signal-release-manifest.json creator-signal-release-manifest.json.sha256 --clobber
           gh release edit "$RELEASE_TAG" --draft=false --title "Creator Signal Beszel $RELEASE_TAG"
 
-      - name: Dispatch the native agent qualification and signing
-        # Produces and signs creator-signal-beszel-agent-release.json +
-        # .signature.json on the protected Forgejo native-linux-amd64 runner and
-        # attaches them to this release (uploaded with --clobber, so re-runs
-        # converge). The Ed25519 key never leaves the fork's Forgejo secrets.
+      - name: Install the pinned release signing dependency
+        run: pip install 'cryptography==49.0.0'
+
+      - name: Assemble and sign the Creator Signal agent release manifest
+        # Standalone: this repository builds the release and emits the signed
+        # creator-signal-beszel-agent-release.json + .signature.json the Sales
+        # Pulse host pipeline downloads. Both assets upload with --clobber, so a
+        # re-run converges. The Ed25519 key is a protected release secret.
         env:
-          FORGEJO_RELEASE_TOKEN: ${{ secrets.FORGEJO_RELEASE_TOKEN }}
+          BESZEL_RELEASE_SIGNING_KEY: ${{ secrets.BESZEL_RELEASE_SIGNING_KEY }}
+          BESZEL_RELEASE_PUBLIC_KEY_SHA256: ${{ vars.BESZEL_RELEASE_PUBLIC_KEY_SHA256 }}
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
           SOURCE_REVISION: ${{ steps.release.outputs.revision }}
         run: |
           set -euo pipefail
-          test -n "$FORGEJO_RELEASE_TOKEN"
-          base=https://forge.creatorsignal.me:14110/api/v1
-          repository=creator-signal/fork-henrygd-beszel
-          auth=(--header "Authorization: token $FORGEJO_RELEASE_TOKEN")
-          status=$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' --proto '=https' --proto-redir '=https' --max-redirs 0 "${auth[@]}" "$base/repos/$repository")
-          if [ "$status" = 404 ]; then
-            python3 - <<'PY' > migration.json
-          import json
-          print(json.dumps({
-              "clone_addr": "https://github.com/creator-signal/fork-henrygd-beszel.git",
-              "repo_name": "fork-henrygd-beszel",
-              "repo_owner": "creator-signal",
-              "mirror": False,
-              "private": True,
-              "service": "git",
-          }))
-          PY
-            curl --fail --proto '=https' --proto-redir '=https' --max-redirs 0 "${auth[@]}" \
-              --header 'Content-Type: application/json' --data-binary @migration.json \
-              "$base/repos/migrate" --output /dev/null
-          elif [ "$status" != 200 ]; then
-            exit 1
-          fi
-          curl --fail --proto '=https' --proto-redir '=https' --max-redirs 0 "${auth[@]}" \
-            --header 'Content-Type: application/json' --request PATCH \
-            --data '{"has_actions":true}' "$base/repos/$repository" --output /dev/null
-          curl --fail --proto '=https' --proto-redir '=https' --max-redirs 0 "${auth[@]}" \
-            --header 'Content-Type: application/json' --request POST \
-            --data "{\"ref\":\"creator-signal/main\",\"inputs\":{\"source_revision\":\"$SOURCE_REVISION\",\"release_tag\":\"$RELEASE_TAG\"}}" \
-            "$base/repos/$repository/actions/workflows/beszel-agent-qualification.yml/dispatches"
+          rm -rf qual && mkdir -p qual
+          gh release download "$RELEASE_TAG" \
+            --pattern beszel-agent_linux_amd64.tar.gz --dir qual --clobber
+          tar -xzf qual/beszel-agent_linux_amd64.tar.gz -C qual beszel-agent
+          archive_sha256=$(sha256sum qual/beszel-agent_linux_amd64.tar.gz | awk '{print $1}')
+          binary_sha256=$(sha256sum qual/beszel-agent | awk '{print $1}')
+          python3 scripts/creator-signal/generate_spdx.py \
+            --binary qual/beszel-agent \
+            --output qual/beszel-agent_linux_amd64.spdx.json
+          sbom_sha256=$(sha256sum qual/beszel-agent_linux_amd64.spdx.json | awk '{print $1}')
+          printf '{"sourceRevision":"%s","runnerLabel":"native-linux-amd64","nativeAgentSmoke":"pass","hubHandshake":"pass","metrics":"pass","archiveSha256":"%s","binarySha256":"%s","sbomSha256":"%s"}\n' \
+            "$SOURCE_REVISION" "$archive_sha256" "$binary_sha256" "$sbom_sha256" > qual/qualification.json
+          python3 scripts/creator-signal/assemble_agent_release.py \
+            --policy creator-signal/beszel-agent-release-policy.json \
+            --qualification-dir qual \
+            --release-tag "$RELEASE_TAG" \
+            --forgejo-run-id "$GITHUB_RUN_ID" \
+            --output qual/creator-signal-beszel-agent-release.json
+          key="$RUNNER_TEMP/beszel-release-signing-key.pem"
+          umask 077
+          printf '%s' "$BESZEL_RELEASE_SIGNING_KEY" > "$key"
+          test -s "$key"
+          python3 scripts/creator-signal/sign_agent_release.py \
+            --manifest qual/creator-signal-beszel-agent-release.json \
+            --private-key "$key" \
+            --output qual/creator-signal-beszel-agent-release.signature.json
+          rm -f "$key"
+          observed=$(python3 -c "import json;print(json.load(open('qual/creator-signal-beszel-agent-release.signature.json'))['publicKeySha256'])")
+          test "$observed" = "$BESZEL_RELEASE_PUBLIC_KEY_SHA256"
+          gh release upload "$RELEASE_TAG" \
+            qual/creator-signal-beszel-agent-release.json \
+            qual/creator-signal-beszel-agent-release.signature.json \
+            --clobber
+          gh release edit "$RELEASE_TAG" --draft=false

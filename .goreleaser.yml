@@ -272,6 +272,9 @@ winget:
 
 release:
   draft: true
+  # Re-running the release workflow for an existing tag must converge instead of
+  # failing with "422 already_exists"; replace the release and its assets.
+  mode: replace
 
 changelog:
   disable: true

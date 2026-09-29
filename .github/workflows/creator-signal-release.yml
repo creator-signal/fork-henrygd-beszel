@@ -205,6 +205,8 @@ jobs:
         # Pulse host pipeline downloads. Both assets upload with --clobber, so a
         # re-run converges. The Ed25519 key is a protected release secret.
         env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           BESZEL_RELEASE_SIGNING_KEY: ${{ secrets.BESZEL_RELEASE_SIGNING_KEY }}
           BESZEL_RELEASE_PUBLIC_KEY_SHA256: ${{ vars.BESZEL_RELEASE_PUBLIC_KEY_SHA256 }}
           RELEASE_TAG: ${{ steps.release.outputs.tag }}

@@ -273,8 +273,9 @@ winget:
 release:
   draft: true
   # Re-running the release workflow for an existing tag must converge instead of
-  # failing with "422 already_exists"; replace the release and its assets.
-  mode: replace
+  # failing with "422 already_exists": when an upload is rejected because the
+  # asset already exists, delete that asset and retry the upload.
+  replace_existing_artifacts: true
 
 changelog:
   disable: true

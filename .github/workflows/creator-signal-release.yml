@@ -40,6 +40,17 @@ jobs:
           test "$(git rev-parse "$RELEASE_TAG^{}")" = "$(git rev-parse HEAD)"
           printf 'tag=%s\nrevision=%s\n' "$RELEASE_TAG" "$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
+      - name: Apply the Creator Signal release configuration
+        env:
+          AUTOMATION_REF: creator-signal/main
+        run: |
+          set -euo pipefail
+          git fetch --force origin "$AUTOMATION_REF"
+          git checkout "origin/$AUTOMATION_REF" -- \
+            .goreleaser.yml \
+            scripts/creator-signal \
+            creator-signal/beszel-agent-release-policy.json
+
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
 

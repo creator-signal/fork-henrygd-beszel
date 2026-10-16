@@ -187,7 +187,7 @@ export function UserAuthForm({
 		if (code) {
 			const state = params.get("state")
 			const provider: AuthProviderInfo = JSON.parse(localStorage.getItem("provider") ?? "{}")
-		    localStorage.removeItem("provider")
+			localStorage.removeItem("provider")
 			window.history.replaceState({}, "", window.location.pathname)
 			if (!state || provider.state !== state) {
 				showLoginFaliedToast()
@@ -201,10 +201,9 @@ export function UserAuthForm({
 			}
 		}
 
-		// auto login if password disabled and only one auth provider
+		// Provider-only login waits for an explicit click. Browsers can block a
+		// timer-opened popup while the SDK keeps its OAuth promise pending.
 		if (!code && !passwordEnabled && authProviders.length === 1 && !sessionStorage.getItem("lo")) {
-			// Add a small timeout to ensure browser is ready to handle popups
-			setTimeout(() => loginWithOauth(authProviders[0], false), 300)
 			return
 		}
 
@@ -347,7 +346,7 @@ export function UserAuthForm({
 								"justify-self-center": !passwordEnabled,
 								"px-5": !passwordEnabled,
 							})}
-							onClick={() => loginWithOauth(provider)}
+							onClick={() => loginWithOauth(provider, true)}
 							disabled={isLoading || isOauthLoading}
 						>
 							{isOauthLoading ? (
